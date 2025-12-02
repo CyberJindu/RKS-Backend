@@ -5,6 +5,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
+const path = require('path'); 
 require('dotenv').config();
 
 // Import routes
@@ -19,9 +20,12 @@ const PORT = process.env.PORT || 3001;
 
 // Security middleware
 app.use(helmet());
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true
+  origin: '*', 
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 // Rate limiting
@@ -54,17 +58,23 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Keepson Backend API',
+    version: '1.0.0',
+    endpoints: {
+      auth: '/api/auth',
+      records: '/api/records',
+      search: '/api/search',
+      upload: '/api/upload',
+      health: '/api/health'
+    }
+  });
+});
+
 // Error handling middleware (must be last)
 app.use(errorHandler);
-
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static('public'));
-  
-  // Serve frontend for any non-API route
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  });
-}
 
 // Start server
 const startServer = async () => {
@@ -73,7 +83,7 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📁 API available at http://localhost:${PORT}/api`);
-      console.log(`🔗 Frontend: ${process.env.FRONTEND_URL}`);
+      console.log(`🔗 CORS: Enabled for all origins (*)`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
