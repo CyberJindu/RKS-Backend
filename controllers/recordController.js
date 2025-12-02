@@ -83,6 +83,9 @@ class RecordController {
 
   // Create new record
   async createRecord(req, res) {
+    let fileUrl = '';
+    let cloudinaryPublicId = '';
+    
     try {
       const { type, title, content, tags = [] } = req.body;
       const file = req.file;
@@ -95,10 +98,9 @@ class RecordController {
         });
       }
       
-      let fileUrl = '';
-      let cloudinaryPublicId = '';
       let metadata = {};
       let geminiSummary = '';
+      let recordContent = content || '';
       
       // Handle file upload if present
       if (file) {
@@ -124,6 +126,16 @@ class RecordController {
               `File: ${file.originalname}, Type: ${type}`,
               type
             );
+          } else if (type === 'note' && file.mimetype === 'text/plain') {
+            // Extract text from .txt file for Gemini
+            try {
+              const fileContent = file.buffer.toString('utf-8');
+              geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
+              recordContent = fileContent; // Store content for display
+            } catch (textError) {
+              console.error('Text extraction error:', textError);
+              geminiSummary = 'Text file uploaded - content extraction failed';
+            }
           }
         } catch (uploadError) {
           console.error('File upload error:', uploadError);
@@ -134,9 +146,9 @@ class RecordController {
         }
       }
       
-      // Generate summary for notes and links
-      if ((type === 'note' || type === 'link') && content) {
-        geminiSummary = await geminiService.extractSummaryFromText(content, type);
+      // Generate summary for notes and links (when no file or direct text input)
+      if ((type === 'note' || type === 'link') && recordContent && !geminiSummary) {
+        geminiSummary = await geminiService.extractSummaryFromText(recordContent, type);
       }
       
       // Create record
@@ -144,10 +156,10 @@ class RecordController {
         user: req.user._id,
         type,
         title,
-        content: content || '',
+        content: recordContent,
         fileUrl,
         cloudinaryPublicId,
-        geminiSummary,
+        geminiSummary: geminiSummary || 'No summary available',
         metadata,
         tags: Array.isArray(tags) ? tags : []
       });
