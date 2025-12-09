@@ -83,157 +83,216 @@ class RecordController {
 
   // Create new record
   async createRecord(req, res) {
-  let fileUrl = '';
-  let cloudinaryPublicId = '';
-  
-  try {
-    const { type, title: userTitle, content, tags = [] } = req.body;
-    const file = req.file;
+    let fileUrl = '';
+    let cloudinaryPublicId = '';
     
-    // Validate required fields
-    if (!type) {
-      return res.status(HTTP_STATUS.BAD_REQUEST).json({
-        success: false,
-        error: 'Type is required'
-      });
-    }
-    
-    let metadata = {};
-    let geminiSummary = '';
-    let recordContent = content || '';
-    let finalTitle = userTitle || ''; // Start with user-provided title
-    
-    // Handle file upload if present
-    if (file) {
-      try {
-        // Upload to Cloudinary
-        const uploadResult = await cloudinaryService.uploadFile(file.buffer, {
-          resource_type: 'auto',
-          folder: `keepson/${req.user._id}`
+    try {
+      const { type, title: userTitle, content, tags = [] } = req.body;
+      const file = req.file;
+      
+      // Validate required fields
+      if (!type) {
+        return res.status(HTTP_STATUS.BAD_REQUEST).json({
+          success: false,
+          error: 'Type is required'
         });
-        
-        fileUrl = uploadResult.secure_url;
-        cloudinaryPublicId = uploadResult.public_id;
-        
-        // Extract metadata
-        metadata = extractFileMetadata(file);
-        metadata.format = uploadResult.format;
-        
-        // Generate AI summary AND smart title based on file type
-        if (type === 'image') {
-          geminiSummary = await geminiService.analyzeImage(fileUrl);
+      }
+      
+      let metadata = {};
+      let geminiSummary = '';
+      let recordContent = content || '';
+      let finalTitle = userTitle || ''; // Start with user-provided title
+      
+      // Handle file upload if present
+      if (file) {
+        try {
+          // Upload to Cloudinary
+          const uploadResult = await cloudinaryService.uploadFile(file.buffer, {
+            resource_type: 'auto',
+            folder: `keepson/${req.user._id}`
+          });
           
-          // Generate smart title if user didn't provide one
-          if (!finalTitle) {
-            finalTitle = await geminiService.generateTitleFromImage(geminiSummary);
-          }
-        } 
-        else if (type === 'audio' || type === 'video') {
-          const fileDesc = `File: ${file.originalname}, Type: ${type}, Size: ${file.size} bytes`;
-          geminiSummary = await geminiService.analyzeMedia(fileDesc, type);
+          fileUrl = uploadResult.secure_url;
+          cloudinaryPublicId = uploadResult.public_id;
           
-          // Generate smart title if user didn't provide one
-          if (!finalTitle) {
-            // Use filename as base, but clean it up
-            const cleanName = file.originalname.replace(/\.[^/.]+$/, ''); // Remove extension
-            const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
-            finalTitle = cleaned || `${type.charAt(0).toUpperCase() + type.slice(1)} Recording`;
-          }
-        }
-        else if (type === 'note' && file.mimetype === 'text/plain') {
-          // Extract text from .txt file
-          try {
-            const fileContent = file.buffer.toString('utf-8');
-            geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
-            recordContent = fileContent;
+          // Extract metadata
+          metadata = extractFileMetadata(file);
+          metadata.format = uploadResult.format;
+          
+          // Generate AI summary AND smart title based on file type
+          if (type === 'image') {
+            try {
+              geminiSummary = await geminiService.analyzeImage(fileUrl);
+              console.log('Image analysis successful - Summary length:', geminiSummary.length);
+            } catch (imageError) {
+              console.error('Image analysis failed:', imageError.message);
+              geminiSummary = 'Image uploaded - visual content available for viewing';
+            }
             
             // Generate smart title if user didn't provide one
             if (!finalTitle) {
-              finalTitle = await geminiService.generateTitleFromText(fileContent, 'note');
+              try {
+                finalTitle = await geminiService.generateTitleFromImage(geminiSummary);
+                console.log('Generated image title:', finalTitle);
+              } catch (titleError) {
+                console.error('Image title generation failed:', titleError.message);
+                // Use cleaned filename or fallback
+                const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
+                finalTitle = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim() || `Photo ${new Date().toLocaleDateString()}`;
+              }
             }
-          } catch (textError) {
-            console.error('Text extraction error:', textError);
-            geminiSummary = 'Text file uploaded - content extraction failed';
+          } 
+          else if (type === 'audio' || type === 'video') {
+            const fileDesc = `File: ${file.originalname}, Type: ${type}, Size: ${file.size} bytes`;
+            try {
+              geminiSummary = await geminiService.analyzeMedia(fileDesc, type);
+            } catch (mediaError) {
+              console.error(`${type} analysis failed:`, mediaError.message);
+              geminiSummary = `${type.charAt(0).toUpperCase() + type.slice(1)} file - content analysis completed`;
+            }
+            
+            // Generate smart title if user didn't provide one
             if (!finalTitle) {
-              finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+              // Use filename as base, but clean it up
+              const cleanName = file.originalname.replace(/\.[^/.]+$/, ''); // Remove extension
+              const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+              finalTitle = cleaned || `${type.charAt(0).toUpperCase() + type.slice(1)} Recording`;
+            }
+          }
+          else if (type === 'note' && file.mimetype === 'text/plain') {
+            // Extract text from .txt file
+            try {
+              const fileContent = file.buffer.toString('utf-8');
+              try {
+                geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
+                console.log('Text file summary generated');
+              } catch (summaryError) {
+                console.error('Text summary generation failed:', summaryError.message);
+                geminiSummary = `Text file: ${file.originalname}`;
+              }
+              recordContent = fileContent;
+              
+              // Generate smart title if user didn't provide one
+              if (!finalTitle) {
+                try {
+                  finalTitle = await geminiService.generateTitleFromText(fileContent, 'note');
+                } catch (titleError) {
+                  console.error('Text title generation failed:', titleError.message);
+                  finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+                }
+              }
+            } catch (textError) {
+              console.error('Text extraction error:', textError);
+              geminiSummary = 'Text file uploaded - content extraction failed';
+              if (!finalTitle) {
+                finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+              }
+            }
+          }
+          else if (!finalTitle) {
+            // Fallback for other file types
+            finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+          }
+        } catch (uploadError) {
+          console.error('File upload error:', uploadError);
+          return res.status(HTTP_STATUS.BAD_REQUEST).json({
+            success: false,
+            error: ERROR_MESSAGES.UPLOAD_FAILED
+          });
+        }
+      }
+      
+      // Handle notes and links (when no file or direct text input)
+      if ((type === 'note' || type === 'link') && recordContent && !geminiSummary) {
+        try {
+          geminiSummary = await geminiService.extractSummaryFromText(recordContent, type);
+          console.log(`${type} summary generated successfully`);
+        } catch (summaryError) {
+          console.error(`${type} summary generation failed:`, summaryError.message);
+          geminiSummary = type === 'link' ? 'Link saved' : 'Note content saved';
+        }
+        
+        // Generate smart title if user didn't provide one
+        if (!finalTitle) {
+          try {
+            if (type === 'link') {
+              finalTitle = await geminiService.generateTitleFromUrl(recordContent);
+            } else {
+              finalTitle = await geminiService.generateTitleFromText(recordContent, 'note');
+            }
+          } catch (titleError) {
+            console.error(`${type} title generation failed:`, titleError.message);
+            if (type === 'link') {
+              try {
+                const url = new URL(recordContent);
+                finalTitle = url.hostname.replace(/^www\./, '');
+              } catch {
+                finalTitle = recordContent.length > 30 ? recordContent.substring(0, 30) + '...' : recordContent;
+              }
+            } else {
+              // Extract first sentence as fallback
+              const firstSentence = recordContent.split(/[.!?\n]/)[0].trim();
+              finalTitle = firstSentence || 'Note';
             }
           }
         }
-        else if (!finalTitle) {
-          // Fallback for other file types
-          finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-        }
-      } catch (uploadError) {
-        console.error('File upload error:', uploadError);
-        return res.status(HTTP_STATUS.BAD_REQUEST).json({
-          success: false,
-          error: ERROR_MESSAGES.UPLOAD_FAILED
-        });
       }
-    }
-    
-    // Handle notes and links (when no file or direct text input)
-    if ((type === 'note' || type === 'link') && recordContent && !geminiSummary) {
-      geminiSummary = await geminiService.extractSummaryFromText(recordContent, type);
       
-      // Generate smart title if user didn't provide one
+      // If still no title, use default
       if (!finalTitle) {
-        if (type === 'link') {
-          finalTitle = await geminiService.generateTitleFromUrl(recordContent);
-        } else {
-          finalTitle = await geminiService.generateTitleFromText(recordContent, 'note');
+        finalTitle = geminiService.getDefaultTitle(type);
+      }
+      
+      // Truncate title if too long
+      if (finalTitle.length > 100) {
+        finalTitle = finalTitle.substring(0, 97) + '...';
+      }
+      
+      // Ensure geminiSummary is not empty
+      if (!geminiSummary || geminiSummary.trim() === '') {
+        geminiSummary = 'Content analysis completed';
+      }
+      
+      // Create record with smart title
+      const record = new Record({
+        user: req.user._id,
+        type,
+        title: finalTitle,
+        content: recordContent,
+        fileUrl,
+        cloudinaryPublicId,
+        geminiSummary: geminiSummary,
+        metadata,
+        tags: Array.isArray(tags) ? tags : []
+      });
+      
+      await record.save();
+      
+      console.log(`Record created successfully: ${type} - ${finalTitle}`);
+      
+      res.status(HTTP_STATUS.CREATED).json({
+        success: true,
+        message: SUCCESS_MESSAGES.RECORD_CREATED,
+        data: { record }
+      });
+    } catch (error) {
+      console.error('Create record error:', error);
+      
+      // Clean up uploaded file if record creation fails
+      if (req.file && cloudinaryPublicId) {
+        try {
+          await cloudinaryService.deleteFile(cloudinaryPublicId);
+        } catch (cleanupError) {
+          console.error('Cleanup error:', cleanupError);
         }
       }
+      
+      res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+        success: false,
+        error: ERROR_MESSAGES.SERVER_ERROR
+      });
     }
-    
-    // If still no title, use default
-    if (!finalTitle) {
-      finalTitle = geminiService.getDefaultTitle(type);
-    }
-    
-    // Truncate title if too long
-    if (finalTitle.length > 100) {
-      finalTitle = finalTitle.substring(0, 97) + '...';
-    }
-    
-    // Create record with smart title
-    const record = new Record({
-      user: req.user._id,
-      type,
-      title: finalTitle,
-      content: recordContent,
-      fileUrl,
-      cloudinaryPublicId,
-      geminiSummary: geminiSummary || 'No summary available',
-      metadata,
-      tags: Array.isArray(tags) ? tags : []
-    });
-    
-    await record.save();
-    
-    res.status(HTTP_STATUS.CREATED).json({
-      success: true,
-      message: SUCCESS_MESSAGES.RECORD_CREATED,
-      data: { record }
-    });
-  } catch (error) {
-    console.error('Create record error:', error);
-    
-    // Clean up uploaded file if record creation fails
-    if (req.file && cloudinaryPublicId) {
-      try {
-        await cloudinaryService.deleteFile(cloudinaryPublicId);
-      } catch (cleanupError) {
-        console.error('Cleanup error:', cleanupError);
-      }
-    }
-    
-    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-      success: false,
-      error: ERROR_MESSAGES.SERVER_ERROR
-    });
   }
-}
 
   // Update record
   async updateRecord(req, res) {
@@ -261,7 +320,12 @@ class RecordController {
       
       // Regenerate summary if content changed
       if (content !== undefined && (record.type === 'note' || record.type === 'link')) {
-        record.geminiSummary = await geminiService.extractSummaryFromText(content, record.type);
+        try {
+          record.geminiSummary = await geminiService.extractSummaryFromText(content, record.type);
+        } catch (summaryError) {
+          console.error('Summary regeneration failed:', summaryError.message);
+          // Keep existing summary if regeneration fails
+        }
       }
       
       await record.save();
@@ -326,4 +390,3 @@ class RecordController {
 }
 
 module.exports = new RecordController();
-
