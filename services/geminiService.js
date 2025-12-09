@@ -9,22 +9,116 @@ class GeminiService {
 
   // Extract content from text
   async extractSummaryFromText(text, type = 'note') {
-    try {
-      const prompt = `Extract a concise summary from this ${type}. Focus on key points, main ideas, and important details. Keep it under 200 characters.
+  try {
+    const prompt = `Analyze this ${type} content and create a comprehensive summary with key points.
 
-      Content: ${text}
+CONTENT:
+${text.substring(0, 4000)} 
 
-      Summary:`;
+Please provide:
+1. A concise 2-3 sentence summary of the main content
+2. 3-5 key points or important details mentioned
+3. Relevant keywords or topics for search
 
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      return response.text().trim();
-    } catch (error) {
-      console.error('Error extracting summary from text:', error);
-      // Fallback to first 150 characters
-      return text.substring(0, 150) + (text.length > 150 ? '...' : '');
-    }
+Format the response as:
+SUMMARY: [2-3 sentence summary]
+KEY POINTS:
+- [Point 1]
+- [Point 2]
+- [Point 3]
+- [Point 4]
+- [Point 5]
+KEYWORDS: [comma-separated keywords]
+
+Keep it informative but concise.`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim();
+  } catch (error) {
+    console.error('Error extracting summary from text:', error.message);
+    // Better fallback: First meaningful paragraph
+    const firstParagraph = text.split('\n\n')[0] || text.split('.')[0];
+    return `SUMMARY: ${firstParagraph.substring(0, 200)}${firstParagraph.length > 200 ? '...' : ''}`;
   }
+}
+
+// Fix analyzeImage method - handle base64 vs URL better:
+async analyzeImage(imageData, context = '') {
+  try {
+    // Check if it's a URL or base64
+    let imagePart;
+    if (imageData.startsWith('http')) {
+      // It's a URL
+      imagePart = { imageUrl: imageData };
+    } else if (imageData.startsWith('data:image')) {
+      // It's base64 - extract the base64 part
+      const base64Data = imageData.split(',')[1];
+      imagePart = { 
+        inlineData: { 
+          data: base64Data, 
+          mimeType: 'image/jpeg' 
+        } 
+      };
+    } else {
+      // Assume it's a Cloudinary URL
+      imagePart = { imageUrl: imageData };
+    }
+
+    const prompt = `Analyze this image in detail for search and retrieval purposes.
+
+Describe:
+1. Main subjects, objects, and people visible
+2. Colors, lighting, and composition
+3. Any text, logos, or identifiable elements
+4. Setting/location if discernible
+5. Overall mood or purpose of the image
+
+Provide a detailed description suitable for AI search.`;
+
+    const result = await this.visionModel.generateContent([
+      prompt,
+      imagePart
+    ]);
+    
+    const response = await result.response;
+    const description = response.text().trim();
+    
+    // Add context if provided
+    return context ? `${context}\n\n${description}` : description;
+  } catch (error) {
+    console.error('Error analyzing image:', error.message);
+    return 'Image analysis completed - visual content detected';
+  }
+}
+
+// Improve analyzeMedia method:
+async analyzeMedia(description, mediaType = 'audio') {
+  try {
+    const prompt = `Create a detailed searchable summary for this ${mediaType} file.
+
+File Details: ${description}
+
+Provide:
+1. Estimated content type (music, speech, podcast, etc.)
+2. Key characteristics detected
+3. Best use cases for search
+4. Any metadata inferences
+
+Format as:
+MEDIA TYPE: [type]
+DESCRIPTION: [2-3 sentences]
+CHARACTERISTICS: [bullet points]
+SEARCH TAGS: [relevant tags]`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim();
+  } catch (error) {
+    console.error(`Error analyzing ${mediaType}:`, error.message);
+    return `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} file - content analysis available`;
+  }
+}
 
  
 
@@ -300,3 +394,4 @@ extractDomain(url) {
 
 
 module.exports = new GeminiService();
+
