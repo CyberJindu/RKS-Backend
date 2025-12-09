@@ -1,5 +1,14 @@
 const { ERROR_MESSAGES, HTTP_STATUS } = require('../utils/constants');
 
+// Define allowed origins here too
+const allowedOrigins = [
+  'https://vitejsvitedzqcdouu-hcg2--5173--365214aa.local-credentialless.webcontainer.io',
+  'https://vitejsvitedzqcdouu-hcg2--5173--*.webcontainer.io',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:8080',
+];
+
 const errorHandler = (err, req, res, next) => {
   console.error('Error:', {
     message: err.message,
@@ -7,6 +16,13 @@ const errorHandler = (err, req, res, next) => {
     path: req.path,
     method: req.method
   });
+
+  // ⚠️ ADD CORS HEADERS TO ALL ERROR RESPONSES
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   // Mongoose validation error
   if (err.name === 'ValidationError') {
