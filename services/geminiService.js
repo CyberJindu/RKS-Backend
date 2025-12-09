@@ -2,13 +2,35 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 class GeminiService {
   constructor() {
+    console.log('=== GEMINI SERVICE INITIALIZATION ===');
+    console.log('API Key present:', !!process.env.GEMINI_API_KEY);
+    console.log('API Key length:', process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : 0);
+    
     this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
     this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-pro-vision' });
+    
+    console.log('Models initialized:', {
+      textModel: 'gemini-pro',
+      visionModel: 'gemini-pro-vision'
+    });
+    console.log('=====================================\n');
   }
 
-  // === IMPROVED TEXT SUMMARY (Keep this version) ===
+  // === DEBUG LOGGER ===
+  debugLog(method, message, data = null) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${method}] ${message}`);
+    if (data) {
+      console.log(`[${timestamp}] [${method}] Data:`, typeof data === 'string' ? data.substring(0, 200) + (data.length > 200 ? '...' : '') : data);
+    }
+  }
+
+  // === IMPROVED TEXT SUMMARY ===
   async extractSummaryFromText(text, type = 'note') {
+    const method = 'extractSummaryFromText';
+    this.debugLog(method, `Starting for ${type}, text length: ${text.length}`);
+    
     try {
       const prompt = `Analyze this ${type} content and create a comprehensive summary with key points.
 
@@ -32,27 +54,41 @@ KEYWORDS: [comma-separated keywords]
 
 Keep it informative but concise.`;
 
+      this.debugLog(method, 'Sending to Gemini...');
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      return response.text().trim();
+      const summary = response.text().trim();
+      
+      this.debugLog(method, `Success! Summary length: ${summary.length}`);
+      this.debugLog(method, `First 150 chars: ${summary.substring(0, 150)}`);
+      
+      return summary;
     } catch (error) {
-      console.error('Error extracting summary from text:', error.message);
+      console.error(`[${method}] ERROR:`, error.message);
+      console.error(`[${method}] Stack:`, error.stack);
+      
       // Better fallback: First meaningful paragraph
       const firstParagraph = text.split('\n\n')[0] || text.split('.')[0];
-      return `SUMMARY: ${firstParagraph.substring(0, 200)}${firstParagraph.length > 200 ? '...' : ''}`;
+      const fallback = `SUMMARY: ${firstParagraph.substring(0, 200)}${firstParagraph.length > 200 ? '...' : ''}`;
+      
+      this.debugLog(method, `Using fallback: ${fallback.substring(0, 100)}`);
+      return fallback;
     }
   }
 
-  // === IMPROVED IMAGE ANALYSIS (Keep this version) ===
+  // === IMPROVED IMAGE ANALYSIS WITH DEBUGGING ===
   async analyzeImage(imageData, context = '') {
+    const method = 'analyzeImage';
+    this.debugLog(method, `Starting analysis, data type: ${typeof imageData}`);
+    
     try {
       // Check if it's a URL or base64
       let imagePart;
       if (imageData.startsWith('http')) {
-        // It's a URL
+        this.debugLog(method, 'Processing as HTTP URL');
         imagePart = { imageUrl: imageData };
       } else if (imageData.startsWith('data:image')) {
-        // It's base64 - extract the base64 part
+        this.debugLog(method, 'Processing as base64 data');
         const base64Data = imageData.split(',')[1];
         imagePart = { 
           inlineData: { 
@@ -61,10 +97,12 @@ Keep it informative but concise.`;
           } 
         };
       } else {
-        // Assume it's a Cloudinary URL
+        this.debugLog(method, 'Processing as generic URL');
         imagePart = { imageUrl: imageData };
       }
 
+      this.debugLog(method, `Image part prepared: ${JSON.stringify(Object.keys(imagePart))}`);
+      
       const prompt = `Analyze this image in detail for search and retrieval purposes.
 
 Describe:
@@ -76,6 +114,8 @@ Describe:
 
 Provide a detailed description suitable for AI search.`;
 
+      this.debugLog(method, 'Sending to Gemini Vision API...');
+      
       const result = await this.visionModel.generateContent([
         prompt,
         imagePart
@@ -84,16 +124,67 @@ Provide a detailed description suitable for AI search.`;
       const response = await result.response;
       const description = response.text().trim();
       
+      this.debugLog(method, `Success! Description length: ${description.length}`);
+      this.debugLog(method, `Preview: ${description.substring(0, 150)}...`);
+      
       // Add context if provided
       return context ? `${context}\n\n${description}` : description;
     } catch (error) {
-      console.error('Error analyzing image:', error.message);
-      return 'Image analysis completed - visual content detected';
+      console.error(`[${method}] ERROR DETAILS:`);
+      console.error(`[${method}] Error name: ${error.name}`);
+      console.error(`[${method}] Error message: ${error.message}`);
+      console.error(`[${method}] Error code: ${error.code}`);
+      console.error(`[${method}] Error status: ${error.status}`);
+      
+      if (error.details) {
+        console.error(`[${method}] Error details:`, error.details);
+      }
+      
+      // Test if it's a URL accessibility issue
+      if (imageData.startsWith('http')) {
+        this.debugLog(method, 'Testing URL accessibility...');
+        try {
+          // Simple URL test
+          const testResult = await this.testUrlAccessibility(imageData);
+          this.debugLog(method, `URL test result: ${testResult}`);
+        } catch (urlError) {
+          console.error(`[${method}] URL test failed: ${urlError.message}`);
+        }
+      }
+      
+      return 'Image uploaded - visual interface detected';
     }
   }
 
-  // === IMPROVED MEDIA ANALYSIS (Keep this version) ===
+  // URL accessibility test
+  async testUrlAccessibility(url) {
+    try {
+      const https = require('https');
+      return new Promise((resolve, reject) => {
+        const req = https.get(url, (res) => {
+          resolve(`Status: ${res.statusCode}, Content-Type: ${res.headers['content-type']}`);
+          res.destroy();
+        });
+        
+        req.on('error', (err) => {
+          reject(`Request failed: ${err.message}`);
+        });
+        
+        req.setTimeout(5000, () => {
+          req.destroy();
+          reject('Timeout after 5 seconds');
+        });
+      });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // === IMPROVED MEDIA ANALYSIS ===
   async analyzeMedia(description, mediaType = 'audio') {
+    const method = 'analyzeMedia';
+    this.debugLog(method, `Starting for ${mediaType}`);
+    
     try {
       const prompt = `Create a detailed searchable summary for this ${mediaType} file.
 
@@ -113,35 +204,46 @@ SEARCH TAGS: [relevant tags]`;
 
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      return response.text().trim();
+      const summary = response.text().trim();
+      
+      this.debugLog(method, `Success! Summary: ${summary.substring(0, 100)}...`);
+      return summary;
     } catch (error) {
-      console.error(`Error analyzing ${mediaType}:`, error.message);
-      return `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} file - content analysis available`;
+      console.error(`[${method}] ERROR: ${error.message}`);
+      return `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} file uploaded`;
     }
   }
 
   // === TITLE GENERATION METHODS ===
   async generateTitleFromText(text, type = 'note') {
+    const method = 'generateTitleFromText';
+    this.debugLog(method, `Starting for ${type}, text length: ${text.length}`);
+    
     try {
       const prompt = `Generate a concise, descriptive title (3-8 words) for this ${type} content. 
       The title should capture the main topic or essence. 
       Make it natural, not generic like "Meeting Notes" or "Document".
       
-      Content: ${text.substring(0, 2000)} // Limit content to avoid token limits
+      Content: ${text.substring(0, 2000)}
       
       Title only (no quotes, no extra text):`;
 
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      return response.text().trim().replace(/["']/g, '');
+      const title = response.text().trim().replace(/["']/g, '');
+      
+      this.debugLog(method, `Generated title: ${title}`);
+      return title;
     } catch (error) {
-      console.error('Error generating title from text:', error);
-      // Fallback: Use first sentence or filename logic
+      console.error(`[${method}] ERROR: ${error.message}`);
       return this.getFallbackTitle(text, type);
     }
   }
 
   async generateTitleFromImage(description) {
+    const method = 'generateTitleFromImage';
+    this.debugLog(method, `Starting with description length: ${description.length}`);
+    
     try {
       const prompt = `Generate a concise, descriptive title (3-6 words) for an image based on this description.
       The title should capture what the image shows.
@@ -152,14 +254,20 @@ SEARCH TAGS: [relevant tags]`;
 
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      return response.text().trim().replace(/["']/g, '');
+      const title = response.text().trim().replace(/["']/g, '');
+      
+      this.debugLog(method, `Generated title: ${title}`);
+      return title;
     } catch (error) {
-      console.error('Error generating title from image:', error);
+      console.error(`[${method}] ERROR: ${error.message}`);
       return 'Photo';
     }
   }
 
   async generateTitleFromUrl(url, content = '') {
+    const method = 'generateTitleFromUrl';
+    this.debugLog(method, `Starting for URL: ${url}`);
+    
     try {
       const prompt = `Generate a concise, descriptive title (3-8 words) for this webpage/link.
       Base it on the URL and any available content.
@@ -173,12 +281,136 @@ SEARCH TAGS: [relevant tags]`;
       const response = await result.response;
       const title = response.text().trim().replace(/["']/g, '');
       
-      // Clean up the title (remove protocol, www, etc.)
+      this.debugLog(method, `Generated title: ${title}`);
       return this.cleanUrlTitle(title, url);
     } catch (error) {
-      console.error('Error generating title from URL:', error);
+      console.error(`[${method}] ERROR: ${error.message}`);
       return this.extractDomain(url);
     }
+  }
+
+  // === SEARCH QUERY PROCESSING WITH BETTER DEBUGGING ===
+  async processSearchQuery(query, recordTypes = []) {
+    const method = 'processSearchQuery';
+    this.debugLog(method, `Starting for query: "${query}"`);
+    
+    try {
+      const prompt = `Convert this natural language search query into structured search parameters.
+      
+      IMPORTANT: Keep phrases together. For example:
+      - "new plot" should return keywords: ["new plot"] not ["new", "plot"]
+      - "keepson structure" should return keywords: ["keepson structure"]
+      - If query is "find my meeting notes", return keywords: ["meeting notes"]
+      - For "I want to find that document called keepson", extract "keepson" as keyword
+      
+      User Query: "${query}"
+
+      Please extract:
+      1. Main keywords to search for (keep phrases intact)
+      2. Date references (if any)
+      3. File type preferences (note, image, audio, video, link)
+      4. Context or additional filters
+
+      Return as a JSON object with these fields:
+      - keywords: array of main search terms (keep phrases together)
+      - dateFilters: object with from/to dates if mentioned
+      - types: array of preferred record types
+      - context: additional context from the query
+
+      Available record types: ${recordTypes.join(', ')}
+
+      Response must be valid JSON only.`;
+
+      this.debugLog(method, 'Sending to Gemini for processing...');
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      const rawResponse = response.text().trim();
+      
+      this.debugLog(method, `Gemini raw response: ${rawResponse.substring(0, 200)}...`);
+      
+      // Parse JSON from response
+      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          this.debugLog(method, `Successfully parsed:`, parsed);
+          return parsed;
+        } catch (parseError) {
+          console.error(`[${method}] JSON parse error: ${parseError.message}`);
+          this.debugLog(method, `Failed to parse JSON, using fallback`);
+        }
+      }
+      
+      // Fallback: Extract keywords manually
+      const fallbackKeywords = this.extractKeywordsManually(query);
+      this.debugLog(method, `Using manual extraction: ${JSON.stringify(fallbackKeywords)}`);
+      
+      return { 
+        keywords: fallbackKeywords.keywords,
+        types: fallbackKeywords.types,
+        dateFilters: null,
+        context: query
+      };
+      
+    } catch (error) {
+      console.error(`[${method}] CRITICAL ERROR: ${error.message}`);
+      console.error(`[${method}] Stack:`, error.stack);
+      
+      // Manual keyword extraction as last resort
+      const manualKeywords = this.extractKeywordsManually(query);
+      return { 
+        keywords: manualKeywords.keywords,
+        types: [],
+        dateFilters: null,
+        context: query
+      };
+    }
+  }
+
+  // Manual keyword extraction for fallback
+  extractKeywordsManually(query) {
+    const method = 'extractKeywordsManually';
+    this.debugLog(method, `Extracting from: "${query}"`);
+    
+    // Remove common phrases
+    const cleaned = query.toLowerCase()
+      .replace(/(i want to|i need to|find|search|look for|that|document|called|named|with the name)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    // Extract potential keywords (words longer than 2 chars)
+    const words = cleaned.split(' ')
+      .filter(word => word.length > 2)
+      .filter(word => !['the', 'and', 'for', 'you', 'are', 'was', 'were'].includes(word));
+    
+    // Also consider the original query as a phrase
+    const phrases = [];
+    if (words.length > 1) {
+      phrases.push(words.join(' '));
+    }
+    
+    // Detect file types
+    const typeKeywords = {
+      'note': ['note', 'text', 'document', 'doc', 'txt', 'write'],
+      'image': ['image', 'photo', 'picture', 'screenshot', 'jpg', 'png'],
+      'audio': ['audio', 'sound', 'music', 'recording', 'mp3', 'wav'],
+      'video': ['video', 'movie', 'clip', 'mp4', 'mov'],
+      'link': ['link', 'url', 'website', 'webpage', 'http']
+    };
+    
+    const detectedTypes = [];
+    for (const [type, keywords] of Object.entries(typeKeywords)) {
+      if (keywords.some(keyword => query.toLowerCase().includes(keyword))) {
+        detectedTypes.push(type);
+      }
+    }
+    
+    this.debugLog(method, `Extracted: words=${words}, phrases=${phrases}, types=${detectedTypes}`);
+    
+    return {
+      keywords: [...phrases, ...words],
+      types: detectedTypes
+    };
   }
 
   // === HELPER METHODS ===
@@ -232,51 +464,10 @@ SEARCH TAGS: [relevant tags]`;
     }
   }
 
-  // === SEARCH METHODS ===
-  async processSearchQuery(query, recordTypes = []) {
-  try {
-    const prompt = `Convert this natural language search query into structured search parameters.
-    
-    IMPORTANT: Keep phrases together. For example:
-    - "new plot" should return keywords: ["new plot"] not ["new", "plot"]
-    - "keepson structure" should return keywords: ["keepson structure"]
-    - If query is "find my meeting notes", return keywords: ["meeting notes"]
-    
-    User Query: "${query}"
-
-    Please extract:
-    1. Main keywords to search for (keep phrases intact)
-    2. Date references (if any)
-    3. File type preferences (note, image, audio, video, link)
-    4. Context or additional filters
-
-    Return as a JSON object with these fields:
-    - keywords: array of main search terms (keep phrases together)
-    - dateFilters: object with from/to dates if mentioned
-    - types: array of preferred record types
-    - context: additional context from the query
-
-    Available record types: ${recordTypes.join(', ')}
-
-    Response must be valid JSON only.`;
-
-    const result = await this.model.generateContent(prompt);
-    const response = await result.response;
-    
-    // Parse JSON from response
-    const jsonMatch = response.text().match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    
-    return { keywords: [query] };
-  } catch (error) {
-    console.error('Error processing search query:', error);
-    return { keywords: [query] };
-  }
-}
-
   async enhanceRecordUnderstanding(record) {
+    const method = 'enhanceRecordUnderstanding';
+    this.debugLog(method, `Starting for record: ${record.title}`);
+    
     try {
       const { type, title, content, geminiSummary } = record;
       
@@ -304,7 +495,7 @@ SEARCH TAGS: [relevant tags]`;
       
       return { enhancedSummary: geminiSummary, tags: [], entities: [] };
     } catch (error) {
-      console.error('Error enhancing record understanding:', error);
+      console.error(`[${method}] ERROR: ${error.message}`);
       return { enhancedSummary: geminiSummary, tags: [], entities: [] };
     }
   }
@@ -340,4 +531,3 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
-
