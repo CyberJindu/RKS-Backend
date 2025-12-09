@@ -84,6 +84,25 @@ RecordSchema.index({ user: 1, createdAt: -1 });
 RecordSchema.index({ user: 1, type: 1 });
 RecordSchema.index({ title: 'text', geminiSummary: 'text', content: 'text' });
 
+// Enhanced text index for better search with weights
+RecordSchema.index(
+  { 
+    title: 'text', 
+    geminiSummary: 'text', 
+    content: 'text',
+    tags: 'text'
+  },
+  {
+    weights: {
+      title: 10,
+      geminiSummary: 5,
+      content: 3,
+      tags: 7
+    },
+    name: 'SearchIndex'
+  }
+);
+
 // Update updatedAt on save
 RecordSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
