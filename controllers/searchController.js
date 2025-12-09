@@ -3,7 +3,7 @@ const geminiService = require('../services/geminiService');
 const { ERROR_MESSAGES, HTTP_STATUS, SEARCH_DEFAULTS } = require('../utils/constants');
 
 class SearchController {
-  // Natural language search - FIXED VERSION
+  // Natural language search - IMPROVED VERSION
   async naturalSearch(req, res) {
     try {
       const { query } = req.body;
@@ -56,12 +56,34 @@ class SearchController {
         // Build enhanced search query
         const enhancedQuery = { user: req.user._id };
         
-        // Add keyword search
+        // Add keyword search with phrase handling
         if (searchParams.keywords && searchParams.keywords.length > 0) {
-          const keywordConditions = searchParams.keywords.flatMap(keyword => [
-            { title: { $regex: keyword, $options: 'i' } },
-            { geminiSummary: { $regex: keyword, $options: 'i' } },
-            { content: { $regex: keyword, $options: 'i' } }
+          const searchPatterns = [];
+          
+          searchParams.keywords.forEach(keyword => {
+            // Add the keyword as-is
+            searchPatterns.push(keyword);
+            
+            // If keyword contains spaces, also search without spaces
+            if (keyword.includes(' ')) {
+              const noSpaces = keyword.replace(/\s+/g, '');
+              searchPatterns.push(noSpaces);
+              
+              // Also try partial matches
+              const words = keyword.split(' ');
+              if (words.length > 1) {
+                searchPatterns.push(...words); // Also search individual words
+              }
+            }
+          });
+          
+          console.log('Enhanced search patterns:', searchPatterns);
+          
+          const keywordConditions = searchPatterns.flatMap(pattern => [
+            { title: { $regex: pattern, $options: 'i' } },
+            { geminiSummary: { $regex: pattern, $options: 'i' } },
+            { content: { $regex: pattern, $options: 'i' } },
+            { tags: { $regex: pattern, $options: 'i' } }
           ]);
           
           enhancedQuery.$or = keywordConditions;
@@ -117,15 +139,41 @@ class SearchController {
       } catch (geminiError) {
         console.error('Gemini search processing failed:', geminiError);
         
-        // Fallback to simple search
+        // IMPROVED: Better fallback search
         const fallbackQuery = {
           user: req.user._id,
-          $or: [
-            { title: { $regex: query.split(' ')[0], $options: 'i' } },
-            { geminiSummary: { $regex: query.split(' ')[0], $options: 'i' } }
-          ]
+          $or: []
         };
-        
+
+        // Try multiple search strategies
+        const searchTerms = [];
+
+        // Original query
+        searchTerms.push(query);
+
+        // Without spaces if query has spaces
+        if (query.includes(' ')) {
+          searchTerms.push(query.replace(/\s+/g, ''));
+        }
+
+        // Individual words
+        const words = query.split(' ');
+        if (words.length > 1) {
+          searchTerms.push(...words);
+        }
+
+        // Create search conditions for all terms
+        const fallbackConditions = searchTerms.flatMap(term => [
+          { title: { $regex: term, $options: 'i' } },
+          { geminiSummary: { $regex: term, $options: 'i' } },
+          { content: { $regex: term, $options: 'i' } },
+          { tags: { $regex: term, $options: 'i' } }
+        ]);
+
+        fallbackQuery.$or = fallbackConditions;
+
+        console.log('Fallback search patterns:', searchTerms);
+
         const fallbackResults = await Record.find(fallbackQuery)
           .sort({ createdAt: -1 })
           .limit(SEARCH_DEFAULTS.LIMIT);
