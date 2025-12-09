@@ -234,42 +234,47 @@ SEARCH TAGS: [relevant tags]`;
 
   // === SEARCH METHODS ===
   async processSearchQuery(query, recordTypes = []) {
-    try {
-      const prompt = `Convert this natural language search query into structured search parameters.
+  try {
+    const prompt = `Convert this natural language search query into structured search parameters.
+    
+    IMPORTANT: Keep phrases together. For example:
+    - "new plot" should return keywords: ["new plot"] not ["new", "plot"]
+    - "keepson structure" should return keywords: ["keepson structure"]
+    - If query is "find my meeting notes", return keywords: ["meeting notes"]
+    
+    User Query: "${query}"
 
-      User Query: "${query}"
+    Please extract:
+    1. Main keywords to search for (keep phrases intact)
+    2. Date references (if any)
+    3. File type preferences (note, image, audio, video, link)
+    4. Context or additional filters
 
-      Please extract:
-      1. Main keywords to search for
-      2. Date references (if any)
-      3. File type preferences (note, image, audio, video, link)
-      4. Context or additional filters
+    Return as a JSON object with these fields:
+    - keywords: array of main search terms (keep phrases together)
+    - dateFilters: object with from/to dates if mentioned
+    - types: array of preferred record types
+    - context: additional context from the query
 
-      Return as a JSON object with these fields:
-      - keywords: array of main search terms
-      - dateFilters: object with from/to dates if mentioned
-      - types: array of preferred record types
-      - context: additional context from the query
+    Available record types: ${recordTypes.join(', ')}
 
-      Available record types: ${recordTypes.join(', ')}
+    Response must be valid JSON only.`;
 
-      Response must be valid JSON only.`;
-
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      
-      // Parse JSON from response
-      const jsonMatch = response.text().match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      }
-      
-      return { keywords: [query] };
-    } catch (error) {
-      console.error('Error processing search query:', error);
-      return { keywords: [query] };
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    
+    // Parse JSON from response
+    const jsonMatch = response.text().match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
     }
+    
+    return { keywords: [query] };
+  } catch (error) {
+    console.error('Error processing search query:', error);
+    return { keywords: [query] };
   }
+}
 
   async enhanceRecordUnderstanding(record) {
     try {
@@ -335,3 +340,4 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
+
