@@ -3,7 +3,7 @@ const geminiService = require('../services/geminiService');
 const { ERROR_MESSAGES, HTTP_STATUS, SEARCH_DEFAULTS } = require('../utils/constants');
 
 class SearchController {
-  // Natural language search
+  // Natural language search - FIXED VERSION
   async naturalSearch(req, res) {
     try {
       const { query } = req.body;
@@ -15,50 +15,132 @@ class SearchController {
         });
       }
       
-      // Process query with Gemini
-      const searchParams = await geminiService.processSearchQuery(query, ['note', 'image', 'audio', 'video', 'link']);
+      console.log('Search query received:', query);
       
-      // Build MongoDB query
-      const mongoQuery = { user: req.user._id };
+      // First, try direct text search (for exact matches)
+      const directSearchQuery = {
+        user: req.user._id,
+        $or: [
+          { title: { $regex: query, $options: 'i' } },
+          { geminiSummary: { $regex: query, $options: 'i' } },
+          { content: { $regex: query, $options: 'i' } },
+          { tags: { $regex: query, $options: 'i' } }
+        ]
+      };
       
-      // Add text search
-      if (searchParams.keywords && searchParams.keywords.length > 0) {
-        mongoQuery.$text = { $search: searchParams.keywords.join(' ') };
-      }
-      
-      // Add type filter
-      if (searchParams.types && searchParams.types.length > 0) {
-        mongoQuery.type = { $in: searchParams.types };
-      }
-      
-      // Add date filter
-      if (searchParams.dateFilters) {
-        const dateQuery = {};
-        if (searchParams.dateFilters.from) {
-          dateQuery.$gte = new Date(searchParams.dateFilters.from);
-        }
-        if (searchParams.dateFilters.to) {
-          dateQuery.$lte = new Date(searchParams.dateFilters.to);
-        }
-        if (Object.keys(dateQuery).length > 0) {
-          mongoQuery.createdAt = dateQuery;
-        }
-      }
-      
-      // Execute search
-      const records = await Record.find(mongoQuery)
-        .sort({ score: { $meta: 'textScore' }, createdAt: -1 })
+      // Execute direct search first
+      const directResults = await Record.find(directSearchQuery)
+        .sort({ createdAt: -1 })
         .limit(SEARCH_DEFAULTS.LIMIT);
       
-      res.status(HTTP_STATUS.OK).json({
-        success: true,
-        data: {
-          query,
-          processedQuery: searchParams,
-          records,
-          count: records.length
+      console.log('Direct search found:', directResults.length, 'records');
+      
+      // If we found direct matches, return them immediately
+      if (directResults.length > 0) {
+        return res.status(HTTP_STATUS.OK).json({
+          success: true,
+          data: {
+            query,
+            searchType: 'direct',
+            records: directResults,
+            count: directResults.length
+          }
+        });
+      }
+      
+      // If no direct matches, try Gemini-enhanced search
+      try {
+        const searchParams = await geminiService.processSearchQuery(query, ['note', 'image', 'audio', 'video', 'link']);
+        console.log('Gemini processed query:', searchParams);
+        
+        // Build enhanced search query
+        const enhancedQuery = { user: req.user._id };
+        
+        // Add keyword search
+        if (searchParams.keywords && searchParams.keywords.length > 0) {
+          const keywordConditions = searchParams.keywords.flatMap(keyword => [
+            { title: { $regex: keyword, $options: 'i' } },
+            { geminiSummary: { $regex: keyword, $options: 'i' } },
+            { content: { $regex: keyword, $options: 'i' } }
+          ]);
+          
+          enhancedQuery.$or = keywordConditions;
         }
-      });
+        
+        // Add type filter
+        if (searchParams.types && searchParams.types.length > 0) {
+          enhancedQuery.type = { $in: searchParams.types };
+        }
+        
+        // Add date filter if available
+        if (searchParams.dateFilters) {
+          const dateQuery = {};
+          if (searchParams.dateFilters.from) {
+            try {
+              dateQuery.$gte = new Date(searchParams.dateFilters.from);
+            } catch (dateError) {
+              console.error('Date parsing error:', dateError);
+            }
+          }
+          if (searchParams.dateFilters.to) {
+            try {
+              dateQuery.$lte = new Date(searchParams.dateFilters.to);
+            } catch (dateError) {
+              console.error('Date parsing error:', dateError);
+            }
+          }
+          if (Object.keys(dateQuery).length > 0) {
+            enhancedQuery.createdAt = dateQuery;
+          }
+        }
+        
+        console.log('Enhanced query:', JSON.stringify(enhancedQuery, null, 2));
+        
+        // Execute enhanced search
+        const enhancedResults = await Record.find(enhancedQuery)
+          .sort({ createdAt: -1 })
+          .limit(SEARCH_DEFAULTS.LIMIT);
+        
+        console.log('Enhanced search found:', enhancedResults.length, 'records');
+        
+        return res.status(HTTP_STATUS.OK).json({
+          success: true,
+          data: {
+            query,
+            searchType: 'enhanced',
+            processedQuery: searchParams,
+            records: enhancedResults,
+            count: enhancedResults.length
+          }
+        });
+        
+      } catch (geminiError) {
+        console.error('Gemini search processing failed:', geminiError);
+        
+        // Fallback to simple search
+        const fallbackQuery = {
+          user: req.user._id,
+          $or: [
+            { title: { $regex: query.split(' ')[0], $options: 'i' } },
+            { geminiSummary: { $regex: query.split(' ')[0], $options: 'i' } }
+          ]
+        };
+        
+        const fallbackResults = await Record.find(fallbackQuery)
+          .sort({ createdAt: -1 })
+          .limit(SEARCH_DEFAULTS.LIMIT);
+        
+        return res.status(HTTP_STATUS.OK).json({
+          success: true,
+          data: {
+            query,
+            searchType: 'fallback',
+            records: fallbackResults,
+            count: fallbackResults.length
+          }
+        });
+      }
+      
     } catch (error) {
       console.error('Natural search error:', error);
       res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
