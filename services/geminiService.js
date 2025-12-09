@@ -26,6 +26,124 @@ class GeminiService {
     }
   }
 
+ 
+
+// Generate smart title from text content
+async generateTitleFromText(text, type = 'note') {
+  try {
+    const prompt = `Generate a concise, descriptive title (3-8 words) for this ${type} content. 
+    The title should capture the main topic or essence. 
+    Make it natural, not generic like "Meeting Notes" or "Document".
+    
+    Content: ${text.substring(0, 2000)} // Limit content to avoid token limits
+    
+    Title only (no quotes, no extra text):`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim().replace(/["']/g, '');
+  } catch (error) {
+    console.error('Error generating title from text:', error);
+    // Fallback: Use first sentence or filename logic
+    return this.getFallbackTitle(text, type);
+  }
+}
+
+// Generate title from image description
+async generateTitleFromImage(description) {
+  try {
+    const prompt = `Generate a concise, descriptive title (3-6 words) for an image based on this description.
+    The title should capture what the image shows.
+    
+    Image description: ${description}
+    
+    Title only (no quotes, no extra text):`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim().replace(/["']/g, '');
+  } catch (error) {
+    console.error('Error generating title from image:', error);
+    return 'Photo';
+  }
+}
+
+// Generate title from URL/link
+async generateTitleFromUrl(url, content = '') {
+  try {
+    const prompt = `Generate a concise, descriptive title (3-8 words) for this webpage/link.
+    Base it on the URL and any available content.
+    
+    URL: ${url}
+    Content: ${content.substring(0, 1000)}
+    
+    Title only (no quotes, no extra text):`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    const title = response.text().trim().replace(/["']/g, '');
+    
+    // Clean up the title (remove protocol, www, etc.)
+    return this.cleanUrlTitle(title, url);
+  } catch (error) {
+    console.error('Error generating title from URL:', error);
+    return this.extractDomain(url);
+  }
+}
+
+// Fallback title generation
+getFallbackTitle(content, type) {
+  if (!content) return this.getDefaultTitle(type);
+  
+  // Try to extract first meaningful sentence
+  const firstSentence = content.split(/[.!?]/)[0];
+  if (firstSentence && firstSentence.length > 10 && firstSentence.length < 100) {
+    return firstSentence.trim();
+  }
+  
+  // Otherwise use default
+  return this.getDefaultTitle(type);
+}
+
+getDefaultTitle(type) {
+  const defaults = {
+    note: 'Note',
+    image: 'Photo',
+    audio: 'Audio Recording',
+    video: 'Video Recording',
+    link: 'Link'
+  };
+  return defaults[type] || 'Record';
+}
+
+// Clean URL for title
+cleanUrlTitle(title, url) {
+  // Remove common prefixes
+  const cleanTitle = title
+    .replace(/^(Title:|Website:|Page:|Link to:|Visit )/i, '')
+    .replace(/ - [^-]+$/, '') // Remove trailing site names
+    .trim();
+    
+  // If title is still just the URL or weird, use domain
+  if (cleanTitle === url || cleanTitle.length > 50) {
+    return this.extractDomain(url);
+  }
+  
+  return cleanTitle;
+}
+
+// Extract domain from URL
+extractDomain(url) {
+  try {
+    const domain = new URL(url).hostname;
+    return domain.replace(/^www\./, '');
+  } catch {
+    // If URL parsing fails, try simple extraction
+    const match = url.match(/^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:/\n?]+)/im);
+    return match ? match[1] : url.substring(0, 30) + '...';
+  }
+}
+
   // Analyze image (via URL or base64)
   async analyzeImage(imageUrl, context = '') {
     try {
@@ -179,5 +297,6 @@ class GeminiService {
     }
   }
 }
+
 
 module.exports = new GeminiService();
