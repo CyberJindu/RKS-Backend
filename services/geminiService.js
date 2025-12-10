@@ -1,5 +1,14 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
+// ADD THIS: Debug logger outside class (consistent with your controllers)
+const debugLog = (method, message, data = null) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [${method}] ${message}`);
+  if (data) {
+    console.log(`[${timestamp}] [${method}] Data:`, typeof data === 'string' ? data.substring(0, 200) + (data.length > 200 ? '...' : '') : data);
+  }
+}
+
 class GeminiService {
   constructor() {
     console.log('=== GEMINI SERVICE INITIALIZATION ===');
@@ -17,19 +26,10 @@ class GeminiService {
     console.log('=====================================\n');
   }
 
-  // === DEBUG LOGGER ===
-  debugLog(method, message, data = null) {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [${method}] ${message}`);
-    if (data) {
-      console.log(`[${timestamp}] [${method}] Data:`, typeof data === 'string' ? data.substring(0, 200) + (data.length > 200 ? '...' : '') : data);
-    }
-  }
-
   // === IMPROVED TEXT SUMMARY ===
   async extractSummaryFromText(text, type = 'note') {
     const method = 'extractSummaryFromText';
-    this.debugLog(method, `Starting for ${type}, text length: ${text.length}`);
+    debugLog(method, `Starting for ${type}, text length: ${text.length}`); // ⬅️ Changed from this.debugLog
     
     try {
       const prompt = `Analyze this ${type} content and create a comprehensive summary with key points.
@@ -54,13 +54,13 @@ KEYWORDS: [comma-separated keywords]
 
 Keep it informative but concise.`;
 
-      this.debugLog(method, 'Sending to Gemini...');
+      debugLog(method, 'Sending to Gemini...'); // ⬅️ Changed
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
       const summary = response.text().trim();
       
-      this.debugLog(method, `Success! Summary length: ${summary.length}`);
-      this.debugLog(method, `First 150 chars: ${summary.substring(0, 150)}`);
+      debugLog(method, `Success! Summary length: ${summary.length}`); // ⬅️ Changed
+      debugLog(method, `First 150 chars: ${summary.substring(0, 150)}`); // ⬅️ Changed
       
       return summary;
     } catch (error) {
@@ -71,154 +71,169 @@ Keep it informative but concise.`;
       const firstParagraph = text.split('\n\n')[0] || text.split('.')[0];
       const fallback = `SUMMARY: ${firstParagraph.substring(0, 200)}${firstParagraph.length > 200 ? '...' : ''}`;
       
-      this.debugLog(method, `Using fallback: ${fallback.substring(0, 100)}`);
+      debugLog(method, `Using fallback: ${fallback.substring(0, 100)}`); // ⬅️ Changed
       return fallback;
     }
   }
 
-  // Add this method to your geminiService.js
-async analyzeDocument(fileUrl, fileDescription) {
-  const method = 'analyzeDocument';
-  debugLog(method, `Starting analysis for: ${fileDescription}`);
-  
-  try {
-    // Use Gemini 2.5 Flash for document analysis
-    const prompt = `Analyze this document and provide a concise summary. 
-    Document details: ${fileDescription}
-    
-    What is this document about? What are the key points, topics, or themes?
-    Provide a 2-3 sentence summary.`;
-    
-    debugLog(method, `Sending to Gemini with URL: ${fileUrl}`);
-    const result = await this.textModel.generateContent([
-      { text: prompt },
-      { 
-        fileData: {
-          fileUri: fileUrl,
-          mimeType: "application/pdf" // Gemini handles various types
-        }
-      }
-    ]);
-    
-    const summary = result.response.text();
-    debugLog(method, `Document analysis successful! Summary length: ${summary.length}`);
-    debugLog(method, `Summary preview: ${summary.substring(0, 150)}...`);
-    
-    return summary;
-  } catch (error) {
-    console.error(`[${method}] ERROR:`, error.message);
-    throw error;
-  }
-}
-
-  // === IMPROVED IMAGE ANALYSIS WITH DEBUGGING ===
-  async analyzeImage(imageData, context = '') {
-    const method = 'analyzeImage';
-    this.debugLog(method, `Starting analysis, data type: ${typeof imageData}`);
+  // === FIXED DOCUMENT ANALYSIS METHOD ===
+  async analyzeDocument(fileUrl, fileDescription, fileBuffer = null, fileName = '', mimeType = '') {
+    const method = 'analyzeDocument';
+    debugLog(method, `Starting analysis for: ${fileDescription}`); // ⬅️ Changed
     
     try {
-      // Check if it's a URL or base64
-      let imagePart;
-      if (imageData.startsWith('http')) {
-        this.debugLog(method, 'Processing as HTTP URL');
-        imagePart = { imageUrl: imageData };
-      } else if (imageData.startsWith('data:image')) {
-        this.debugLog(method, 'Processing as base64 data');
-        const base64Data = imageData.split(',')[1];
-        imagePart = { 
-          inlineData: { 
-            data: base64Data, 
-            mimeType: 'image/jpeg' 
-          } 
-        };
-      } else {
-        this.debugLog(method, 'Processing as generic URL');
-        imagePart = { imageUrl: imageData };
-      }
-
-      this.debugLog(method, `Image part prepared: ${JSON.stringify(Object.keys(imagePart))}`);
+      let documentContent = '';
+      let extracted = false;
       
-      const prompt = `Analyze this image in detail for search and retrieval purposes.
-
-Describe:
-1. Main subjects, objects, and people visible
-2. Colors, lighting, and composition
-3. Any text, logos, or identifiable elements
-4. Setting/location if discernible
-5. Overall mood or purpose of the image
-
-Provide a detailed description suitable for AI search.`;
-
-      this.debugLog(method, 'Sending to Gemini Vision API...');
-      
-      const result = await this.visionModel.generateContent([
-        prompt,
-        imagePart
-      ]);
-      
-      const response = await result.response;
-      const description = response.text().trim();
-      
-      this.debugLog(method, `Success! Description length: ${description.length}`);
-      this.debugLog(method, `Preview: ${description.substring(0, 150)}...`);
-      
-      // Add context if provided
-      return context ? `${context}\n\n${description}` : description;
-    } catch (error) {
-      console.error(`[${method}] ERROR DETAILS:`);
-      console.error(`[${method}] Error name: ${error.name}`);
-      console.error(`[${method}] Error message: ${error.message}`);
-      console.error(`[${method}] Error code: ${error.code}`);
-      console.error(`[${method}] Error status: ${error.status}`);
-      
-      if (error.details) {
-        console.error(`[${method}] Error details:`, error.details);
-      }
-      
-      // Test if it's a URL accessibility issue
-      if (imageData.startsWith('http')) {
-        this.debugLog(method, 'Testing URL accessibility...');
+      // If we have the file buffer AND documentParser is available, try to extract text
+      if (fileBuffer && fileName && fileBuffer.length > 0) {
+        debugLog(method, 'Attempting to check for document parser...'); // ⬅️ Changed
         try {
-          // Simple URL test
-          const testResult = await this.testUrlAccessibility(imageData);
-          this.debugLog(method, `URL test result: ${testResult}`);
-        } catch (urlError) {
-          console.error(`[${method}] URL test failed: ${urlError.message}`);
+          // Try to import document parser (might not exist yet)
+          const documentParser = require('../utils/documentParser');
+          debugLog(method, 'Document parser found, attempting extraction...'); // ⬅️ Changed
+          
+          const extractionResult = await documentParser.extractTextFromFile(fileBuffer, fileName, mimeType);
+          
+          if (extractionResult.success && extractionResult.extracted && extractionResult.text) {
+            documentContent = extractionResult.text;
+            extracted = true;
+            debugLog(method, `Local extraction successful! Got ${documentContent.length} chars`); // ⬅️ Changed
+          }
+        } catch (parserError) {
+          debugLog(method, `Document parser not available or failed: ${parserError.message}`); // ⬅️ Changed
         }
       }
       
+      let prompt;
+      
+      if (extracted && documentContent) {
+        // Analyze extracted text
+        const contentToAnalyze = documentContent.substring(0, 10000); // Limit for Gemini
+        prompt = `Analyze this document content and provide a comprehensive summary.
+
+DOCUMENT DETAILS: ${fileDescription}
+DOCUMENT CONTENT:
+${contentToAnalyze}
+
+Please provide:
+1. Main topic and purpose
+2. Key points or sections
+3. Important data or findings
+4. Overall summary (2-3 sentences)
+
+Format clearly for searchability.`;
+        
+        debugLog(method, `Sending to Gemini WITH extracted content (${contentToAnalyze.length} chars)...`); // ⬅️ Changed
+      } else {
+        // Fallback: Analyze based on file description only
+        prompt = `Based on this file information, what do you think this document might contain?
+
+FILE DETAILS: ${fileDescription}
+
+Please provide:
+1. Likely document type and purpose
+2. Common content for this file type
+3. Best search keywords for such documents
+4. Brief descriptive summary
+
+Be informative but acknowledge this is based on metadata only.`;
+        
+        debugLog(method, 'Sending to Gemini with metadata only...'); // ⬅️ Changed
+      }
+      
+      const result = await this.model.generateContent(prompt);
+      const summary = result.response.text();
+      
+      debugLog(method, `Document analysis successful! Summary length: ${summary.length}`); // ⬅️ Changed
+      debugLog(method, `Summary preview: ${summary.substring(0, 150)}...`); // ⬅️ Changed
+      
+      return summary;
+    } catch (error) {
+      console.error(`[${method}] ERROR:`, error.message);
+      throw error;
+    }
+  }
+
+  // === FIXED IMAGE ANALYSIS METHOD ===
+  async analyzeImage(imageUrl) { // ⬅️ Changed parameter name for clarity
+    const method = 'analyzeImage';
+    debugLog(method, `Starting analysis for URL: ${imageUrl}`); // ⬅️ Changed
+    
+    try {
+      // Convert URL to base64 first
+      debugLog(method, 'Converting URL to base64...'); // ⬅️ Changed
+      const base64Image = await this.urlToBase64(imageUrl);
+      
+      if (!base64Image) {
+        throw new Error('Failed to convert image URL to base64');
+      }
+      
+      const prompt = "Describe what you see in this image. Focus on content, objects, text, colors, and overall purpose. Be concise.";
+      
+      debugLog(method, 'Sending to Gemini Vision API...'); // ⬅️ Changed
+      
+      // CORRECT FORMAT for Gemini API
+      const result = await this.visionModel.generateContent([
+        prompt,
+        {
+          inlineData: {
+            mimeType: "image/png",
+            data: base64Image
+          }
+        }
+      ]);
+      
+      const description = result.response.text();
+      debugLog(method, `Image analysis successful! Description: ${description.substring(0, 100)}...`); // ⬅️ Changed
+      
+      return description;
+    } catch (error) {
+      console.error(`[${method}] ERROR:`, error.message);
+      console.error(`[${method}] Stack:`, error.stack);
       return 'Image uploaded - visual interface detected';
     }
   }
 
-  // URL accessibility test
-  async testUrlAccessibility(url) {
+  // === URL TO BASE64 HELPER ===
+  async urlToBase64(url) {
     try {
+      debugLog('urlToBase64', `Fetching image from URL: ${url}`); // ⬅️ Changed
+      
       const https = require('https');
+      const http = require('http');
+      
       return new Promise((resolve, reject) => {
-        const req = https.get(url, (res) => {
-          resolve(`Status: ${res.statusCode}, Content-Type: ${res.headers['content-type']}`);
-          res.destroy();
-        });
+        const client = url.startsWith('https') ? https : http;
         
-        req.on('error', (err) => {
-          reject(`Request failed: ${err.message}`);
-        });
-        
-        req.setTimeout(5000, () => {
-          req.destroy();
-          reject('Timeout after 5 seconds');
+        client.get(url, (response) => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`Failed to fetch image: ${response.statusCode}`));
+            return;
+          }
+          
+          const chunks = [];
+          response.on('data', (chunk) => chunks.push(chunk));
+          response.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            const base64 = buffer.toString('base64');
+            debugLog('urlToBase64', `Converted successfully, size: ${base64.length} chars`); // ⬅️ Changed
+            resolve(base64);
+          });
+        }).on('error', (error) => {
+          reject(error);
         });
       });
     } catch (error) {
-      throw error;
+      console.error('URL to Base64 conversion failed:', error);
+      return '';
     }
   }
 
   // === IMPROVED MEDIA ANALYSIS ===
   async analyzeMedia(description, mediaType = 'audio') {
     const method = 'analyzeMedia';
-    this.debugLog(method, `Starting for ${mediaType}`);
+    debugLog(method, `Starting for ${mediaType}`); // ⬅️ Changed
     
     try {
       const prompt = `Create a detailed searchable summary for this ${mediaType} file.
@@ -241,7 +256,7 @@ SEARCH TAGS: [relevant tags]`;
       const response = await result.response;
       const summary = response.text().trim();
       
-      this.debugLog(method, `Success! Summary: ${summary.substring(0, 100)}...`);
+      debugLog(method, `Success! Summary: ${summary.substring(0, 100)}...`); // ⬅️ Changed
       return summary;
     } catch (error) {
       console.error(`[${method}] ERROR: ${error.message}`);
@@ -252,7 +267,7 @@ SEARCH TAGS: [relevant tags]`;
   // === TITLE GENERATION METHODS ===
   async generateTitleFromText(text, type = 'note') {
     const method = 'generateTitleFromText';
-    this.debugLog(method, `Starting for ${type}, text length: ${text.length}`);
+    debugLog(method, `Starting for ${type}, text length: ${text.length}`); // ⬅️ Changed
     
     try {
       const prompt = `Generate a concise, descriptive title (3-8 words) for this ${type} content. 
@@ -267,7 +282,7 @@ SEARCH TAGS: [relevant tags]`;
       const response = await result.response;
       const title = response.text().trim().replace(/["']/g, '');
       
-      this.debugLog(method, `Generated title: ${title}`);
+      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
       return title;
     } catch (error) {
       console.error(`[${method}] ERROR: ${error.message}`);
@@ -277,7 +292,7 @@ SEARCH TAGS: [relevant tags]`;
 
   async generateTitleFromImage(description) {
     const method = 'generateTitleFromImage';
-    this.debugLog(method, `Starting with description length: ${description.length}`);
+    debugLog(method, `Starting with description length: ${description.length}`); // ⬅️ Changed
     
     try {
       const prompt = `Generate a concise, descriptive title (3-6 words) for an image based on this description.
@@ -291,7 +306,7 @@ SEARCH TAGS: [relevant tags]`;
       const response = await result.response;
       const title = response.text().trim().replace(/["']/g, '');
       
-      this.debugLog(method, `Generated title: ${title}`);
+      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
       return title;
     } catch (error) {
       console.error(`[${method}] ERROR: ${error.message}`);
@@ -301,7 +316,7 @@ SEARCH TAGS: [relevant tags]`;
 
   async generateTitleFromUrl(url, content = '') {
     const method = 'generateTitleFromUrl';
-    this.debugLog(method, `Starting for URL: ${url}`);
+    debugLog(method, `Starting for URL: ${url}`); // ⬅️ Changed
     
     try {
       const prompt = `Generate a concise, descriptive title (3-8 words) for this webpage/link.
@@ -316,7 +331,7 @@ SEARCH TAGS: [relevant tags]`;
       const response = await result.response;
       const title = response.text().trim().replace(/["']/g, '');
       
-      this.debugLog(method, `Generated title: ${title}`);
+      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
       return this.cleanUrlTitle(title, url);
     } catch (error) {
       console.error(`[${method}] ERROR: ${error.message}`);
@@ -324,10 +339,10 @@ SEARCH TAGS: [relevant tags]`;
     }
   }
 
-  // === SEARCH QUERY PROCESSING WITH BETTER DEBUGGING ===
+  // === SEARCH QUERY PROCESSING ===
   async processSearchQuery(query, recordTypes = []) {
     const method = 'processSearchQuery';
-    this.debugLog(method, `Starting for query: "${query}"`);
+    debugLog(method, `Starting for query: "${query}"`); // ⬅️ Changed
     
     try {
       const prompt = `Convert this natural language search query into structured search parameters.
@@ -356,29 +371,29 @@ SEARCH TAGS: [relevant tags]`;
 
       Response must be valid JSON only.`;
 
-      this.debugLog(method, 'Sending to Gemini for processing...');
+      debugLog(method, 'Sending to Gemini for processing...'); // ⬅️ Changed
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
       const rawResponse = response.text().trim();
       
-      this.debugLog(method, `Gemini raw response: ${rawResponse.substring(0, 200)}...`);
+      debugLog(method, `Gemini raw response: ${rawResponse.substring(0, 200)}...`); // ⬅️ Changed
       
       // Parse JSON from response
       const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
           const parsed = JSON.parse(jsonMatch[0]);
-          this.debugLog(method, `Successfully parsed:`, parsed);
+          debugLog(method, `Successfully parsed:`, parsed); // ⬅️ Changed
           return parsed;
         } catch (parseError) {
           console.error(`[${method}] JSON parse error: ${parseError.message}`);
-          this.debugLog(method, `Failed to parse JSON, using fallback`);
+          debugLog(method, `Failed to parse JSON, using fallback`); // ⬅️ Changed
         }
       }
       
       // Fallback: Extract keywords manually
       const fallbackKeywords = this.extractKeywordsManually(query);
-      this.debugLog(method, `Using manual extraction: ${JSON.stringify(fallbackKeywords)}`);
+      debugLog(method, `Using manual extraction: ${JSON.stringify(fallbackKeywords)}`); // ⬅️ Changed
       
       return { 
         keywords: fallbackKeywords.keywords,
@@ -405,7 +420,7 @@ SEARCH TAGS: [relevant tags]`;
   // Manual keyword extraction for fallback
   extractKeywordsManually(query) {
     const method = 'extractKeywordsManually';
-    this.debugLog(method, `Extracting from: "${query}"`);
+    debugLog(method, `Extracting from: "${query}"`); // ⬅️ Changed
     
     // Remove common phrases
     const cleaned = query.toLowerCase()
@@ -440,7 +455,7 @@ SEARCH TAGS: [relevant tags]`;
       }
     }
     
-    this.debugLog(method, `Extracted: words=${words}, phrases=${phrases}, types=${detectedTypes}`);
+    debugLog(method, `Extracted: words=${words}, phrases=${phrases}, types=${detectedTypes}`); // ⬅️ Changed
     
     return {
       keywords: [...phrases, ...words],
@@ -501,7 +516,7 @@ SEARCH TAGS: [relevant tags]`;
 
   async enhanceRecordUnderstanding(record) {
     const method = 'enhanceRecordUnderstanding';
-    this.debugLog(method, `Starting for record: ${record.title}`);
+    debugLog(method, `Starting for record: ${record.title}`); // ⬅️ Changed
     
     try {
       const { type, title, content, geminiSummary } = record;
@@ -566,5 +581,3 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
-
-
