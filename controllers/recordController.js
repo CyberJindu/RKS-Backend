@@ -20,7 +20,7 @@ class RecordController {
   // Get all records for current user
   async getAllRecords(req, res) {
     const method = 'getAllRecords';
-    debugLog(method, 'Starting'); // ⬅️ Changed from this.debugLog to debugLog
+    debugLog(method, 'Starting');
     
     try {
       const { page = 1, limit = 20, type, sortBy = 'createdAt', sortOrder = -1 } = req.query;
@@ -74,7 +74,7 @@ class RecordController {
   // Get single record
   async getRecord(req, res) {
     const method = 'getRecord';
-    debugLog(method, `Getting record: ${req.params.id}`); // ⬅️ Changed
+    debugLog(method, `Getting record: ${req.params.id}`);
     
     try {
       const { id } = req.params;
@@ -110,7 +110,7 @@ class RecordController {
   // Create new record - WITH COMPREHENSIVE DEBUGGING
   async createRecord(req, res) {
     const method = 'createRecord';
-    debugLog(method, '=== STARTING RECORD CREATION ==='); // ⬅️ Changed
+    debugLog(method, '=== STARTING RECORD CREATION ===');
     
     let fileUrl = '';
     let cloudinaryPublicId = '';
@@ -119,7 +119,7 @@ class RecordController {
       const { type, title: userTitle, content, tags = [] } = req.body;
       const file = req.file;
       
-      debugLog(method, `Request details:`, { // ⬅️ Changed
+      debugLog(method, `Request details:`, {
         type,
         userTitle,
         contentLength: content ? content.length : 0,
@@ -131,7 +131,7 @@ class RecordController {
       
       // Validate required fields
       if (!type) {
-        debugLog(method, 'Validation failed: type is required'); // ⬅️ Changed
+        debugLog(method, 'Validation failed: type is required');
         return res.status(HTTP_STATUS.BAD_REQUEST).json({
           success: false,
           error: 'Type is required'
@@ -170,7 +170,9 @@ class RecordController {
           metadata.format = uploadResult.format;
           debugLog(method, 'Extracted metadata:', metadata);
           
-          // Generate AI summary AND smart title based on file type
+          // ========== GEMINI INTEGRATION FOR ALL FILE TYPES ==========
+          
+          // IMAGE ANALYSIS
           if (type === 'image') {
             debugLog(method, '--- IMAGE ANALYSIS START ---');
             try {
@@ -200,6 +202,8 @@ class RecordController {
               }
             }
           } 
+          
+          // AUDIO/VIDEO ANALYSIS
           else if (type === 'audio' || type === 'video') {
             debugLog(method, `--- ${type.toUpperCase()} ANALYSIS START ---`);
             const fileDesc = `File: ${file.originalname}, Type: ${type}, Size: ${file.size} bytes`;
@@ -221,44 +225,111 @@ class RecordController {
               debugLog(method, `Generated ${type} title: ${finalTitle}`);
             }
           }
-          else if (type === 'note' && file.mimetype === 'text/plain') {
-            debugLog(method, '--- TEXT FILE PROCESSING ---');
-            // Extract text from .txt file
-            try {
-              const fileContent = file.buffer.toString('utf-8');
-              debugLog(method, `Extracted ${fileContent.length} chars from text file`);
+          
+          // TEXT/DOCUMENT ANALYSIS (TXT, DOCX, PDF, etc.)
+          else if (type === 'note' || type === 'document') {
+            debugLog(method, '--- DOCUMENT ANALYSIS START ---');
+            debugLog(method, `Document type: ${file.mimetype}, Size: ${file.size} bytes`);
+            
+            // For plain text files, extract text and analyze
+            if (file.mimetype === 'text/plain') {
+              debugLog(method, 'Processing plain text file...');
+              try {
+                const fileContent = file.buffer.toString('utf-8');
+                debugLog(method, `Extracted ${fileContent.length} chars from text file`);
+                
+                try {
+                  geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
+                  debugLog(method, `Text summary generated: ${geminiSummary.substring(0, 100)}...`);
+                } catch (summaryError) {
+                  console.error(`[${method}] Text summary ERROR:`, summaryError.message);
+                  geminiSummary = `Text file: ${file.originalname}`;
+                  debugLog(method, `Using fallback: ${geminiSummary}`);
+                }
+                
+                recordContent = fileContent;
+                
+                // Generate smart title if user didn't provide one
+                if (!finalTitle) {
+                  try {
+                    finalTitle = await geminiService.generateTitleFromText(fileContent, 'note');
+                    debugLog(method, `Generated text title: ${finalTitle}`);
+                  } catch (titleError) {
+                    console.error(`[${method}] Text title ERROR:`, titleError.message);
+                    finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+                    debugLog(method, `Using filename title: ${finalTitle}`);
+                  }
+                }
+              } catch (textError) {
+                console.error(`[${method}] Text extraction ERROR:`, textError);
+                geminiSummary = 'Text file uploaded - content extraction failed';
+                if (!finalTitle) {
+                  finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+                }
+                debugLog(method, `Text extraction failed, using fallbacks`);
+              }
+            }
+            // For other document types (DOCX, PDF, etc.) - use URL analysis
+            else if (file.mimetype.includes('document') || 
+                     file.mimetype.includes('pdf') || 
+                     file.mimetype.includes('msword') ||
+                     file.mimetype.includes('presentation') ||
+                     file.mimetype.includes('spreadsheet')) {
+              
+              debugLog(method, `Processing document file: ${file.mimetype}`);
               
               try {
-                geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
-                debugLog(method, `Text summary generated: ${geminiSummary.substring(0, 100)}...`);
-              } catch (summaryError) {
-                console.error(`[${method}] Text summary ERROR:`, summaryError.message);
-                geminiSummary = `Text file: ${file.originalname}`;
-                debugLog(method, `Using fallback: ${geminiSummary}`);
+                // Use Gemini to analyze document via URL
+                debugLog(method, `Calling Gemini analyzeDocument with URL: ${fileUrl}`);
+                const fileDesc = `Document: ${file.originalname}, Type: ${file.mimetype}, Size: ${file.size} bytes`;
+                geminiSummary = await geminiService.analyzeDocument(fileUrl, fileDesc);
+                debugLog(method, `Document analysis successful: ${geminiSummary.substring(0, 100)}...`);
+              } catch (docError) {
+                console.error(`[${method}] Document analysis ERROR:`, docError.message);
+                console.error(`[${method}] Stack:`, docError.stack);
+                geminiSummary = `${file.mimetype.split('/')[1]} document uploaded: ${file.originalname}`;
+                debugLog(method, `Using fallback summary: ${geminiSummary}`);
               }
-              
-              recordContent = fileContent;
               
               // Generate smart title if user didn't provide one
               if (!finalTitle) {
                 try {
-                  finalTitle = await geminiService.generateTitleFromText(fileContent, 'note');
-                  debugLog(method, `Generated text title: ${finalTitle}`);
-                } catch (titleError) {
-                  console.error(`[${method}] Text title ERROR:`, titleError.message);
+                  // Use filename as base, cleaned up
+                  const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
+                  const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+                  
+                  // If we have a summary, try to generate better title from it
+                  if (geminiSummary && geminiSummary.length > 20) {
+                    try {
+                      finalTitle = await geminiService.generateTitleFromText(geminiSummary.substring(0, 500), 'note');
+                      debugLog(method, `Generated document title from summary: ${finalTitle}`);
+                    } catch (titleError) {
+                      console.error(`[${method}] Document title generation ERROR:`, titleError.message);
+                      finalTitle = cleaned || `Document ${new Date().toLocaleDateString()}`;
+                      debugLog(method, `Using cleaned filename as title: ${finalTitle}`);
+                    }
+                  } else {
+                    finalTitle = cleaned || `Document ${new Date().toLocaleDateString()}`;
+                    debugLog(method, `Using cleaned filename as title: ${finalTitle}`);
+                  }
+                } catch (error) {
+                  console.error(`[${method}] Title generation ERROR:`, error.message);
                   finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-                  debugLog(method, `Using filename title: ${finalTitle}`);
+                  debugLog(method, `Using raw filename as title: ${finalTitle}`);
                 }
               }
-            } catch (textError) {
-              console.error(`[${method}] Text extraction ERROR:`, textError);
-              geminiSummary = 'Text file uploaded - content extraction failed';
+            }
+            // For other note file types
+            else {
+              debugLog(method, `Unsupported note file type: ${file.mimetype}`);
               if (!finalTitle) {
                 finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+                debugLog(method, `Using filename as title: ${finalTitle}`);
               }
-              debugLog(method, `Text extraction failed, using fallbacks`);
             }
           }
+          
+          // OTHER FILE TYPES (generic handling)
           else if (!finalTitle) {
             // Fallback for other file types
             finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
