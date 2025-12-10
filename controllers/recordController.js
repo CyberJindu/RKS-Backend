@@ -269,7 +269,7 @@ class RecordController {
                 debugLog(method, `Text extraction failed, using fallbacks`);
               }
             }
-            // For other document types (DOCX, PDF, etc.) - use URL analysis
+            // For other document types (DOCX, PDF, etc.) - use BUFFER ANALYSIS (NOT URL)
             else if (file.mimetype.includes('document') || 
                      file.mimetype.includes('pdf') || 
                      file.mimetype.includes('msword') ||
@@ -279,10 +279,19 @@ class RecordController {
               debugLog(method, `Processing document file: ${file.mimetype}`);
               
               try {
-                // Use Gemini to analyze document via URL
-                debugLog(method, `Calling Gemini analyzeDocument with URL: ${fileUrl}`);
+                // Use Gemini to analyze document WITH FILE BUFFER (for text extraction)
+                debugLog(method, `Calling Gemini analyzeDocument with BUFFER extraction...`);
                 const fileDesc = `Document: ${file.originalname}, Type: ${file.mimetype}, Size: ${file.size} bytes`;
-                geminiSummary = await geminiService.analyzeDocument(fileUrl, fileDesc);
+                
+                // ⬇️⬇️⬇️ CRITICAL CHANGE: Pass file buffer for local text extraction ⬇️⬇️⬇️
+                geminiSummary = await geminiService.analyzeDocument(
+                  fileUrl,           // Cloudinary URL
+                  fileDesc,          // File description
+                  file.buffer,       // FILE BUFFER for local extraction
+                  file.originalname, // File name
+                  file.mimetype      // MIME type
+                );
+                
                 debugLog(method, `Document analysis successful: ${geminiSummary.substring(0, 100)}...`);
               } catch (docError) {
                 console.error(`[${method}] Document analysis ERROR:`, docError.message);
