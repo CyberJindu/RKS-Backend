@@ -17,11 +17,11 @@ class GeminiService {
     
     this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
     console.log('Models initialized:', {
       textModel: 'gemini-2.5-flash',
-      visionModel: 'gemini-2.0-flash-exp'
+      visionModel: 'gemini-1.5-flash'
     });
     console.log('=====================================\n');
   }
@@ -581,3 +581,4 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
+
