@@ -7,12 +7,12 @@ class GeminiService {
     console.log('API Key length:', process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : 0);
     
     this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
-    this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-pro-vision' });
+    this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
     
     console.log('Models initialized:', {
-      textModel: 'gemini-pro',
-      visionModel: 'gemini-pro-vision'
+      textModel: 'gemini-2.5-flash',
+      visionModel: 'gemini-2.0-flash-exp'
     });
     console.log('=====================================\n');
   }
@@ -531,3 +531,4 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
+
