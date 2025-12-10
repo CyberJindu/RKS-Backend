@@ -2,7 +2,7 @@ const Record = require('../models/Record');
 const geminiService = require('../services/geminiService');
 const { ERROR_MESSAGES, HTTP_STATUS, SEARCH_DEFAULTS } = require('../utils/constants');
 
-// Debug logger - MOVED OUTSIDE CLASS (same fix as recordController)
+// Debug logger - MOVED OUTSIDE CLASS
 const debugLog = (method, message, data = null) => {
   const timestamp = new Date().toISOString();
   console.log(`\n[${timestamp}] [SearchController.${method}] ${message}`);
@@ -12,13 +12,58 @@ const debugLog = (method, message, data = null) => {
   }
 }
 
+// Helper function: Escape regex special characters
+const escapeRegex = (text) => {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Helper function: Generate all possible search patterns from a query
+const generateAllSearchPatterns = (query) => {
+  const patterns = new Set();
+  
+  // Original query
+  patterns.add(query);
+  
+  // Lowercase version
+  patterns.add(query.toLowerCase());
+  
+  // Without spaces
+  if (query.includes(' ')) {
+    patterns.add(query.replace(/\s+/g, ''));
+    patterns.add(query.toLowerCase().replace(/\s+/g, ''));
+  }
+  
+  // Individual words (longer than 2 chars)
+  const words = query.split(' ')
+    .filter(word => word.length > 2)
+    .map(word => word.toLowerCase());
+  
+  words.forEach(word => patterns.add(word));
+  
+  // Common variations
+  if (words.length > 1) {
+    // All combinations of adjacent words
+    for (let i = 0; i < words.length; i++) {
+      for (let j = i + 1; j <= words.length; j++) {
+        const phrase = words.slice(i, j).join(' ');
+        if (phrase.length > 3) {
+          patterns.add(phrase);
+          patterns.add(phrase.replace(/\s+/g, ''));
+        }
+      }
+    }
+  }
+  
+  return Array.from(patterns);
+}
+
 class SearchController {
-  // Debug logger REMOVED from class (now above as standalone function)
+  // Debug logger and helper methods REMOVED from class (now above)
 
   // Natural language search - ULTRA DEBUGGING VERSION
   async naturalSearch(req, res) {
     const method = 'naturalSearch';
-    debugLog(method, '=== STARTING SEARCH ==='); // ⬅️ Changed from this.debugLog
+    debugLog(method, '=== STARTING SEARCH ===');
     
     try {
       const { query } = req.body;
@@ -114,12 +159,12 @@ class SearchController {
         const allVariations = [...new Set(searchPatterns)]; // Remove duplicates
         debugLog(method, `All search patterns (${allVariations.length}):`, allVariations);
         
-        // Build search conditions
+        // Build search conditions - USING escapeRegex HELPER FUNCTION
         const keywordConditions = allVariations.flatMap(pattern => [
-          { title: { $regex: this.escapeRegex(pattern), $options: 'i' } },
-          { geminiSummary: { $regex: this.escapeRegex(pattern), $options: 'i' } },
-          { content: { $regex: this.escapeRegex(pattern), $options: 'i' } },
-          { tags: { $regex: this.escapeRegex(pattern), $options: 'i' } }
+          { title: { $regex: escapeRegex(pattern), $options: 'i' } },
+          { geminiSummary: { $regex: escapeRegex(pattern), $options: 'i' } },
+          { content: { $regex: escapeRegex(pattern), $options: 'i' } },
+          { tags: { $regex: escapeRegex(pattern), $options: 'i' } }
         ]);
         
         enhancedQuery.$or = keywordConditions;
@@ -189,16 +234,16 @@ class SearchController {
           $or: []
         };
 
-        // Generate ALL possible search patterns
-        const searchTerms = this.generateAllSearchPatterns(query);
+        // Generate ALL possible search patterns - USING generateAllSearchPatterns HELPER
+        const searchTerms = generateAllSearchPatterns(query);
         debugLog(method, `Generated ${searchTerms.length} search patterns:`, searchTerms);
 
         // Create search conditions for all terms
         const fallbackConditions = searchTerms.flatMap(term => [
-          { title: { $regex: this.escapeRegex(term), $options: 'i' } },
-          { geminiSummary: { $regex: this.escapeRegex(term), $options: 'i' } },
-          { content: { $regex: this.escapeRegex(term), $options: 'i' } },
-          { tags: { $regex: this.escapeRegex(term), $options: 'i' } }
+          { title: { $regex: escapeRegex(term), $options: 'i' } },
+          { geminiSummary: { $regex: escapeRegex(term), $options: 'i' } },
+          { content: { $regex: escapeRegex(term), $options: 'i' } },
+          { tags: { $regex: escapeRegex(term), $options: 'i' } }
         ]);
 
         fallbackQuery.$or = fallbackConditions;
@@ -235,55 +280,10 @@ class SearchController {
     }
   }
 
-  // Generate all possible search patterns from a query
-  generateAllSearchPatterns(query) {
-    const patterns = new Set();
-    
-    // Original query
-    patterns.add(query);
-    
-    // Lowercase version
-    patterns.add(query.toLowerCase());
-    
-    // Without spaces
-    if (query.includes(' ')) {
-      patterns.add(query.replace(/\s+/g, ''));
-      patterns.add(query.toLowerCase().replace(/\s+/g, ''));
-    }
-    
-    // Individual words (longer than 2 chars)
-    const words = query.split(' ')
-      .filter(word => word.length > 2)
-      .map(word => word.toLowerCase());
-    
-    words.forEach(word => patterns.add(word));
-    
-    // Common variations
-    if (words.length > 1) {
-      // All combinations of adjacent words
-      for (let i = 0; i < words.length; i++) {
-        for (let j = i + 1; j <= words.length; j++) {
-          const phrase = words.slice(i, j).join(' ');
-          if (phrase.length > 3) {
-            patterns.add(phrase);
-            patterns.add(phrase.replace(/\s+/g, ''));
-          }
-        }
-      }
-    }
-    
-    return Array.from(patterns);
-  }
-
-  // Escape regex special characters
-  escapeRegex(text) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
   // Advanced search with filters
   async advancedSearch(req, res) {
     const method = 'advancedSearch';
-    debugLog(method, 'Starting advanced search'); // ⬅️ Changed
+    debugLog(method, 'Starting advanced search');
     
     try {
       const {
