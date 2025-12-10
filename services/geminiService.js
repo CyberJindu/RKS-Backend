@@ -76,6 +76,41 @@ Keep it informative but concise.`;
     }
   }
 
+  // Add this method to your geminiService.js
+async analyzeDocument(fileUrl, fileDescription) {
+  const method = 'analyzeDocument';
+  debugLog(method, `Starting analysis for: ${fileDescription}`);
+  
+  try {
+    // Use Gemini 2.5 Flash for document analysis
+    const prompt = `Analyze this document and provide a concise summary. 
+    Document details: ${fileDescription}
+    
+    What is this document about? What are the key points, topics, or themes?
+    Provide a 2-3 sentence summary.`;
+    
+    debugLog(method, `Sending to Gemini with URL: ${fileUrl}`);
+    const result = await this.textModel.generateContent([
+      { text: prompt },
+      { 
+        fileData: {
+          fileUri: fileUrl,
+          mimeType: "application/pdf" // Gemini handles various types
+        }
+      }
+    ]);
+    
+    const summary = result.response.text();
+    debugLog(method, `Document analysis successful! Summary length: ${summary.length}`);
+    debugLog(method, `Summary preview: ${summary.substring(0, 150)}...`);
+    
+    return summary;
+  } catch (error) {
+    console.error(`[${method}] ERROR:`, error.message);
+    throw error;
+  }
+}
+
   // === IMPROVED IMAGE ANALYSIS WITH DEBUGGING ===
   async analyzeImage(imageData, context = '') {
     const method = 'analyzeImage';
@@ -531,4 +566,5 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
+
 
