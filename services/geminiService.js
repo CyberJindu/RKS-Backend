@@ -266,78 +266,130 @@ SEARCH TAGS: [relevant tags]`;
 
   // === TITLE GENERATION METHODS ===
   async generateTitleFromText(text, type = 'note') {
-    const method = 'generateTitleFromText';
-    debugLog(method, `Starting for ${type}, text length: ${text.length}`); // ⬅️ Changed
+  const method = 'generateTitleFromText';
+  debugLog(method, `Starting for ${type}, text length: ${text.length}`);
+  
+  try {
+    // IMPROVED PROMPT - More specific about avoiding generic titles
+    const prompt = `Generate a concise, descriptive title (3-8 words) for this ${type} content. 
+    IMPORTANT: DO NOT use generic titles like "Meeting Notes", "Document", "Text File", "Photo", "Image", 
+    "Audio Recording", "Video Clip", "Link", "Website" or just dates.
     
-    try {
-      const prompt = `Generate a concise, descriptive title (3-8 words) for this ${type} content. 
-      The title should capture the main topic or essence. 
-      Make it natural, not generic like "Meeting Notes" or "Document".
-      
-      Content: ${text.substring(0, 2000)}
-      
-      Title only (no quotes, no extra text):`;
-
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const title = response.text().trim().replace(/["']/g, '');
-      
-      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
-      return title;
-    } catch (error) {
-      console.error(`[${method}] ERROR: ${error.message}`);
-      return this.getFallbackTitle(text, type);
-    }
-  }
-
-  async generateTitleFromImage(description) {
-    const method = 'generateTitleFromImage';
-    debugLog(method, `Starting with description length: ${description.length}`); // ⬅️ Changed
+    The title should:
+    1. Capture the main topic, subject, or essence of the content
+    2. Be specific and meaningful
+    3. Use key terms from the content
+    4. Avoid being too vague
     
-    try {
-      const prompt = `Generate a concise, descriptive title (3-6 words) for an image based on this description.
-      The title should capture what the image shows.
-      
-      Image description: ${description}
-      
-      Title only (no quotes, no extra text):`;
-
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const title = response.text().trim().replace(/["']/g, '');
-      
-      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
-      return title;
-    } catch (error) {
-      console.error(`[${method}] ERROR: ${error.message}`);
-      return 'Photo';
-    }
-  }
-
-  async generateTitleFromUrl(url, content = '') {
-    const method = 'generateTitleFromUrl';
-    debugLog(method, `Starting for URL: ${url}`); // ⬅️ Changed
+    If it's a meeting note, extract the main topic discussed.
+    If it's a document, extract the document's purpose or main subject.
+    If it's technical content, include key technical terms.
     
-    try {
-      const prompt = `Generate a concise, descriptive title (3-8 words) for this webpage/link.
-      Base it on the URL and any available content.
-      
-      URL: ${url}
-      Content: ${content.substring(0, 1000)}
-      
-      Title only (no quotes, no extra text):`;
+    Content: ${text.substring(0, 2000)}
+    
+    Title only (no quotes, no extra text, no labels like "Title:"):`;
 
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const title = response.text().trim().replace(/["']/g, '');
-      
-      debugLog(method, `Generated title: ${title}`); // ⬅️ Changed
-      return this.cleanUrlTitle(title, url);
-    } catch (error) {
-      console.error(`[${method}] ERROR: ${error.message}`);
-      return this.extractDomain(url);
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    let title = response.text().trim().replace(/["']/g, '');
+    
+    // Clean up - remove any remaining generic prefixes
+    title = title.replace(/^(Title:|Title for |Document Title:|Meeting Notes:|Note:|Image:|Photo:|Link:|Website:|Audio:|Video:)/i, '').trim();
+    
+    // Check if title is still generic
+    const isGeneric = this.isGenericTitle(title);
+    if (isGeneric) {
+      debugLog(method, `Title "${title}" is still generic, trying alternative approach`);
+      return this.extractFirstMeaningfulPhrase(text, 60);
     }
+    
+    debugLog(method, `Generated title: ${title}`);
+    return title;
+  } catch (error) {
+    console.error(`[${method}] ERROR: ${error.message}`);
+    return this.extractFirstMeaningfulPhrase(text, 60);
   }
+}
+
+async generateTitleFromImage(description) {
+  const method = 'generateTitleFromImage';
+  debugLog(method, `Starting with description length: ${description.length}`);
+  
+  try {
+    const prompt = `Generate a concise, descriptive title (3-6 words) for an image based on this description.
+    IMPORTANT: DO NOT use generic words like "Photo", "Image", "Picture", "Snapshot" or just dates.
+    
+    The title should:
+    1. Describe what the image shows in a specific way
+    2. Mention key objects, scenes, or subjects
+    3. Use descriptive adjectives when appropriate
+    4. Be specific, not vague
+    
+    Image description: ${description.substring(0, 1000)}
+    
+    Title only (no quotes, no extra text, no labels):`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    let title = response.text().trim().replace(/["']/g, '');
+    
+    // Clean up
+    title = title.replace(/^(Title:|Image:|Photo:|Picture:)/i, '').trim();
+    
+    // Check if generic
+    const isGeneric = this.isGenericTitle(title);
+    if (isGeneric || title.length < 3) {
+      debugLog(method, `Title "${title}" is generic, extracting from description`);
+      return this.extractImageTitleFromDescription(description);
+    }
+    
+    debugLog(method, `Generated title: ${title}`);
+    return title;
+  } catch (error) {
+    console.error(`[${method}] ERROR: ${error.message}`);
+    return this.extractImageTitleFromDescription(description);
+  }
+}
+
+async generateTitleFromUrl(url, content = '') {
+  const method = 'generateTitleFromUrl';
+  debugLog(method, `Starting for URL: ${url}`);
+  
+  try {
+    const prompt = `Generate a concise, descriptive title (3-8 words) for this webpage/link.
+    IMPORTANT: DO NOT use generic words like "Link", "Website", "Page", "URL".
+    
+    The title should:
+    1. Describe the website's purpose or content
+    2. Use the domain name or key terms
+    3. Be specific about what the link is for
+    4. Avoid being too vague
+    
+    URL: ${url}
+    Content: ${content.substring(0, 1000)}
+    
+    Title only (no quotes, no extra text, no labels):`;
+
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    let title = response.text().trim().replace(/["']/g, '');
+    
+    // Clean up
+    title = title.replace(/^(Title:|Link:|Website:|Page:|URL:)/i, '').trim();
+    
+    // Check if generic
+    const isGeneric = this.isGenericTitle(title);
+    if (isGeneric || title === url || title.length < 3) {
+      return this.cleanUrlTitle(this.extractDomain(url), url);
+    }
+    
+    debugLog(method, `Generated title: ${title}`);
+    return this.cleanUrlTitle(title, url);
+  } catch (error) {
+    console.error(`[${method}] ERROR: ${error.message}`);
+    return this.extractDomain(url);
+  }
+}
 
   // === SEARCH QUERY PROCESSING ===
   async processSearchQuery(query, recordTypes = []) {
@@ -465,17 +517,15 @@ SEARCH TAGS: [relevant tags]`;
 
   // === HELPER METHODS ===
   getFallbackTitle(content, type) {
-    if (!content) return this.getDefaultTitle(type);
-    
-    // Try to extract first meaningful sentence
-    const firstSentence = content.split(/[.!?]/)[0];
-    if (firstSentence && firstSentence.length > 10 && firstSentence.length < 100) {
-      return firstSentence.trim();
-    }
-    
-    // Otherwise use default
-    return this.getDefaultTitle(type);
+  if (!content) return this.getDefaultTitle(type);
+  
+  const phrase = this.extractFirstMeaningfulPhrase(content, 50);
+  if (phrase && phrase !== this.getDefaultTitle(type)) {
+    return phrase;
   }
+  
+  return this.getDefaultTitle(type);
+}
 
   getDefaultTitle(type) {
     const defaults = {
@@ -502,6 +552,96 @@ SEARCH TAGS: [relevant tags]`;
     
     return cleanTitle;
   }
+
+  isGenericTitle(title) {
+  if (!title) return true;
+  
+  const lowerTitle = title.toLowerCase();
+  const genericWords = [
+    'photo', 'image', 'picture', 'img', 'snapshot',
+    'note', 'document', 'doc', 'text', 'file',
+    'audio', 'sound', 'recording', 'track',
+    'video', 'movie', 'clip', 'film',
+    'link', 'url', 'website', 'webpage', 'page',
+    'meeting', 'notes', 'documentation'
+  ];
+  
+  const datePattern = /\d{4}[-/]\d{1,2}[-/]\d{1,2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+  
+  // Check if title is just a generic word or includes date
+  const words = lowerTitle.split(/\s+/);
+  if (words.length <= 2) {
+    return genericWords.some(word => lowerTitle.includes(word)) || datePattern.test(lowerTitle);
+  }
+  
+  // Check for generic patterns
+  return genericWords.some(word => 
+    lowerTitle.includes(word) && (lowerTitle.match(/\d+/) || datePattern.test(lowerTitle))
+  );
+}
+
+extractFirstMeaningfulPhrase(text, maxLength = 60) {
+  if (!text || text.trim() === '') return this.getDefaultTitle('note');
+  
+  // Remove HTML tags if any
+  const cleanText = text.replace(/<[^>]*>/g, '');
+  
+  // Try to find first sentence
+  const sentences = cleanText.split(/[.!?\n]/);
+  for (let sentence of sentences) {
+    const trimmed = sentence.trim();
+    if (trimmed.length > 10 && trimmed.length < maxLength && !this.isGenericTitle(trimmed)) {
+      // Capitalize first letter
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+    }
+  }
+  
+  // If no good sentence found, extract first non-trivial words
+  const words = cleanText.split(/\s+/).filter(word => word.length > 3);
+  if (words.length >= 3) {
+    const phrase = words.slice(0, 6).join(' ');
+    if (phrase.length > 10 && !this.isGenericTitle(phrase)) {
+      return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+    }
+  }
+  
+  // Last resort: use content type with something descriptive
+  return this.getDefaultTitle('note');
+}
+
+extractImageTitleFromDescription(description) {
+  if (!description) return 'Photo';
+  
+  // Extract key nouns from description
+  const nouns = description.match(/\b([A-Z][a-z]+|[A-Z]+)\b/g) || [];
+  const lowerDesc = description.toLowerCase();
+  
+  // Look for specific scene descriptors
+  const sceneWords = ['sunset', 'sunrise', 'landscape', 'portrait', 'cityscape', 'seascape', 
+                      'mountain', 'beach', 'forest', 'garden', 'office', 'home', 'room'];
+  
+  for (const word of sceneWords) {
+    if (lowerDesc.includes(word)) {
+      return word.charAt(0).toUpperCase() + word.slice(1) + ' Scene';
+    }
+  }
+  
+  // Use first proper noun if available
+  if (nouns.length > 0 && nouns[0].length > 3) {
+    return nouns[0];
+  }
+  
+  // Extract first meaningful phrase
+  const phrases = description.split(/[,.;]/);
+  for (const phrase of phrases) {
+    const trimmed = phrase.trim();
+    if (trimmed.length > 10 && trimmed.length < 40) {
+      return trimmed;
+    }
+  }
+  
+  return 'Captured Image';
+}
 
   extractDomain(url) {
     try {
@@ -581,5 +721,6 @@ SEARCH TAGS: [relevant tags]`;
 }
 
 module.exports = new GeminiService();
+
 
 
