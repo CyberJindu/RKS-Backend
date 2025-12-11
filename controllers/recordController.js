@@ -109,275 +109,325 @@ class RecordController {
 
   // Create new record - WITH COMPREHENSIVE DEBUGGING
   async createRecord(req, res) {
-    const method = 'createRecord';
-    debugLog(method, '=== STARTING RECORD CREATION ===');
+  const method = 'createRecord';
+  debugLog(method, '=== STARTING RECORD CREATION ===');
+  
+  let fileUrl = '';
+  let cloudinaryPublicId = '';
+  
+  try {
+    const { type, title: userTitle, content, tags = [] } = req.body;
+    const file = req.file;
     
-    let fileUrl = '';
-    let cloudinaryPublicId = '';
+    debugLog(method, `Request details:`, {
+      type,
+      userTitle: userTitle || 'empty',
+      contentLength: content ? content.length : 0,
+      tagsCount: tags.length,
+      filePresent: !!file,
+      fileName: file ? file.originalname : 'none',
+      fileSize: file ? file.size : 0
+    });
     
-    try {
-      const { type, title: userTitle, content, tags = [] } = req.body;
-      const file = req.file;
-      
-      debugLog(method, `Request details:`, {
-        type,
-        userTitle,
-        contentLength: content ? content.length : 0,
-        tagsCount: tags.length,
-        filePresent: !!file,
-        fileName: file ? file.originalname : 'none',
-        fileSize: file ? file.size : 0
+    // Validate required fields
+    if (!type) {
+      debugLog(method, 'Validation failed: type is required');
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: 'Type is required'
       });
+    }
+    
+    let metadata = {};
+    let geminiSummary = '';
+    let recordContent = content || '';
+    let finalTitle = userTitle ? userTitle.trim() : '';
+    
+    // Track if user provided a title
+    const userProvidedTitle = !!userTitle && userTitle.trim() !== '';
+    debugLog(method, `User provided title: ${userProvidedTitle} ("${finalTitle}")`);
+    
+    // Helper function to check if title is generic
+    const isGenericTitle = (title) => {
+      if (!title) return false;
+      const lowerTitle = title.toLowerCase();
+      const genericPatterns = [
+        'photo', 'image', 'picture', 'img',
+        'note', 'document', 'doc', 'text',
+        'audio', 'sound', 'recording',
+        'video', 'movie', 'clip',
+        'link', 'url', 'website'
+      ];
       
-      // Validate required fields
-      if (!type) {
-        debugLog(method, 'Validation failed: type is required');
-        return res.status(HTTP_STATUS.BAD_REQUEST).json({
-          success: false,
-          error: 'Type is required'
+      // Check for patterns like "Photo 2024-12-12" or "Note December 12"
+      const datePattern = /\d{4}[-/]\d{2}[-/]\d{2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+      
+      return genericPatterns.some(pattern => 
+        lowerTitle.includes(pattern) && (lowerTitle.match(/\d+/) || datePattern.test(lowerTitle))
+      );
+    };
+    
+    // Handle file upload if present
+    if (file) {
+      debugLog(method, '--- FILE UPLOAD PROCESSING ---');
+      try {
+        // Upload to Cloudinary
+        debugLog(method, `Uploading to Cloudinary: ${file.originalname} (${file.size} bytes)`);
+        const uploadResult = await cloudinaryService.uploadFile(file.buffer, {
+          resource_type: 'auto',
+          folder: `keepson/${req.user._id}`
         });
-      }
-      
-      let metadata = {};
-      let geminiSummary = '';
-      let recordContent = content || '';
-      let finalTitle = userTitle || '';
-      
-      debugLog(method, `Initial state: finalTitle="${finalTitle}", recordContent length=${recordContent.length}`);
-      
-      // Handle file upload if present
-      if (file) {
-        debugLog(method, '--- FILE UPLOAD PROCESSING ---');
-        try {
-          // Upload to Cloudinary
-          debugLog(method, `Uploading to Cloudinary: ${file.originalname} (${file.size} bytes)`);
-          const uploadResult = await cloudinaryService.uploadFile(file.buffer, {
-            resource_type: 'auto',
-            folder: `keepson/${req.user._id}`
-          });
+        
+        fileUrl = uploadResult.secure_url;
+        cloudinaryPublicId = uploadResult.public_id;
+        
+        debugLog(method, `Cloudinary upload successful:`, {
+          url: fileUrl,
+          publicId: cloudinaryPublicId,
+          format: uploadResult.format
+        });
+        
+        // Extract metadata
+        metadata = extractFileMetadata(file);
+        metadata.format = uploadResult.format;
+        debugLog(method, 'Extracted metadata:', metadata);
+        
+        // ========== GEMINI INTEGRATION FOR ALL FILE TYPES ==========
+        
+        // IMAGE ANALYSIS
+        if (type === 'image') {
+          debugLog(method, '--- IMAGE ANALYSIS START ---');
+          try {
+            debugLog(method, `Calling Gemini analyzeImage with URL: ${fileUrl}`);
+            geminiSummary = await geminiService.analyzeImage(fileUrl);
+            debugLog(method, `Image analysis successful! Summary length: ${geminiSummary.length}`);
+            debugLog(method, `Summary preview: ${geminiSummary.substring(0, 150)}...`);
+          } catch (imageError) {
+            console.error(`[${method}] Image analysis ERROR:`, imageError.message);
+            geminiSummary = 'Image uploaded - contains visual interface elements';
+            debugLog(method, `Using fallback summary: ${geminiSummary}`);
+          }
           
-          fileUrl = uploadResult.secure_url;
-          cloudinaryPublicId = uploadResult.public_id;
-          
-          debugLog(method, `Cloudinary upload successful:`, {
-            url: fileUrl,
-            publicId: cloudinaryPublicId,
-            format: uploadResult.format
-          });
-          
-          // Extract metadata
-          metadata = extractFileMetadata(file);
-          metadata.format = uploadResult.format;
-          debugLog(method, 'Extracted metadata:', metadata);
-          
-          // ========== GEMINI INTEGRATION FOR ALL FILE TYPES ==========
-          
-          // IMAGE ANALYSIS
-          if (type === 'image') {
-            debugLog(method, '--- IMAGE ANALYSIS START ---');
+          // CRITICAL FIX: Generate smart title if user didn't provide one OR provided generic title
+          if (!userProvidedTitle || isGenericTitle(finalTitle)) {
+            debugLog(method, 'Generating title for image...');
             try {
-              debugLog(method, `Calling Gemini analyzeImage with URL: ${fileUrl}`);
-              geminiSummary = await geminiService.analyzeImage(fileUrl);
-              debugLog(method, `Image analysis successful! Summary length: ${geminiSummary.length}`);
-              debugLog(method, `Summary preview: ${geminiSummary.substring(0, 150)}...`);
-            } catch (imageError) {
-              console.error(`[${method}] Image analysis ERROR:`, imageError.message);
-              console.error(`[${method}] Stack:`, imageError.stack);
-              geminiSummary = 'Image uploaded - contains visual interface elements';
-              debugLog(method, `Using fallback summary: ${geminiSummary}`);
-            }
-            
-            // Generate smart title if user didn't provide one
-            if (!finalTitle) {
-              debugLog(method, 'Generating title for image...');
-              try {
-                finalTitle = await geminiService.generateTitleFromImage(geminiSummary);
+              const geminiTitle = await geminiService.generateTitleFromImage(geminiSummary);
+              if (geminiTitle && geminiTitle.length > 5 && !isGenericTitle(geminiTitle)) {
+                finalTitle = geminiTitle;
                 debugLog(method, `Generated image title: ${finalTitle}`);
-              } catch (titleError) {
-                console.error(`[${method}] Image title generation ERROR:`, titleError.message);
-                // Use cleaned filename or fallback
+              } else if (!finalTitle) {
+                // Only use filename as fallback if no title at all
+                const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
+                finalTitle = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim() || `Photo ${new Date().toLocaleDateString()}`;
+                debugLog(method, `Using filename-based title: ${finalTitle}`);
+              }
+            } catch (titleError) {
+              console.error(`[${method}] Image title generation ERROR:`, titleError.message);
+              if (!finalTitle) {
                 const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
                 finalTitle = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim() || `Photo ${new Date().toLocaleDateString()}`;
                 debugLog(method, `Using filename-based title: ${finalTitle}`);
               }
             }
-          } 
+          }
+        } 
+        
+        // AUDIO/VIDEO ANALYSIS
+        else if (type === 'audio' || type === 'video') {
+          debugLog(method, `--- ${type.toUpperCase()} ANALYSIS START ---`);
+          const fileDesc = `File: ${file.originalname}, Type: ${type}, Size: ${file.size} bytes`;
+          try {
+            geminiSummary = await geminiService.analyzeMedia(fileDesc, type);
+            debugLog(method, `${type} analysis successful: ${geminiSummary.substring(0, 100)}...`);
+          } catch (mediaError) {
+            console.error(`[${method}] ${type} analysis ERROR:`, mediaError.message);
+            geminiSummary = `${type.charAt(0).toUpperCase() + type.slice(1)} file uploaded`;
+            debugLog(method, `Using fallback: ${geminiSummary}`);
+          }
           
-          // AUDIO/VIDEO ANALYSIS
-          else if (type === 'audio' || type === 'video') {
-            debugLog(method, `--- ${type.toUpperCase()} ANALYSIS START ---`);
-            const fileDesc = `File: ${file.originalname}, Type: ${type}, Size: ${file.size} bytes`;
-            try {
-              geminiSummary = await geminiService.analyzeMedia(fileDesc, type);
-              debugLog(method, `${type} analysis successful: ${geminiSummary.substring(0, 100)}...`);
-            } catch (mediaError) {
-              console.error(`[${method}] ${type} analysis ERROR:`, mediaError.message);
-              geminiSummary = `${type.charAt(0).toUpperCase() + type.slice(1)} file uploaded`;
-              debugLog(method, `Using fallback: ${geminiSummary}`);
+          // Generate smart title if user didn't provide one OR provided generic title
+          if (!userProvidedTitle || isGenericTitle(finalTitle)) {
+            // Try to generate smart title from summary
+            if (geminiSummary && geminiSummary.length > 50) {
+              try {
+                const geminiTitle = await geminiService.generateTitleFromText(geminiSummary.substring(0, 500), type);
+                if (geminiTitle && geminiTitle.length > 5 && !isGenericTitle(geminiTitle)) {
+                  finalTitle = geminiTitle;
+                  debugLog(method, `Generated ${type} title from summary: ${finalTitle}`);
+                }
+              } catch (titleError) {
+                console.error(`[${method}] ${type} title generation ERROR:`, titleError.message);
+              }
             }
             
-            // Generate smart title if user didn't provide one
-            if (!finalTitle) {
-              // Use filename as base, but clean it up
+            // If still no good title, use filename
+            if (!finalTitle || isGenericTitle(finalTitle)) {
               const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
               const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
               finalTitle = cleaned || `${type.charAt(0).toUpperCase() + type.slice(1)} Recording`;
-              debugLog(method, `Generated ${type} title: ${finalTitle}`);
+              debugLog(method, `Using filename-based ${type} title: ${finalTitle}`);
             }
           }
-          
-          // TEXT/DOCUMENT ANALYSIS (TXT, DOCX, PDF, etc.)
-          else if (type === 'note' || type === 'document') {
-            debugLog(method, '--- DOCUMENT ANALYSIS START ---');
-            debugLog(method, `Document type: ${file.mimetype}, Size: ${file.size} bytes`);
-            
-            // For plain text files, extract text and analyze
-            if (file.mimetype === 'text/plain') {
-              debugLog(method, 'Processing plain text file...');
-              try {
-                const fileContent = file.buffer.toString('utf-8');
-                debugLog(method, `Extracted ${fileContent.length} chars from text file`);
-                
-                try {
-                  geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
-                  debugLog(method, `Text summary generated: ${geminiSummary.substring(0, 100)}...`);
-                } catch (summaryError) {
-                  console.error(`[${method}] Text summary ERROR:`, summaryError.message);
-                  geminiSummary = `Text file: ${file.originalname}`;
-                  debugLog(method, `Using fallback: ${geminiSummary}`);
-                }
-                
-                recordContent = fileContent;
-                
-                // Generate smart title if user didn't provide one
-                if (!finalTitle) {
-                  try {
-                    finalTitle = await geminiService.generateTitleFromText(fileContent, 'note');
-                    debugLog(method, `Generated text title: ${finalTitle}`);
-                  } catch (titleError) {
-                    console.error(`[${method}] Text title ERROR:`, titleError.message);
-                    finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-                    debugLog(method, `Using filename title: ${finalTitle}`);
-                  }
-                }
-              } catch (textError) {
-                console.error(`[${method}] Text extraction ERROR:`, textError);
-                geminiSummary = 'Text file uploaded - content extraction failed';
-                if (!finalTitle) {
-                  finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-                }
-                debugLog(method, `Text extraction failed, using fallbacks`);
-              }
-            }
-            // For other document types (DOCX, PDF, etc.) - use BUFFER ANALYSIS (NOT URL)
-            else if (file.mimetype.includes('document') || 
-                     file.mimetype.includes('pdf') || 
-                     file.mimetype.includes('msword') ||
-                     file.mimetype.includes('presentation') ||
-                     file.mimetype.includes('spreadsheet')) {
-              
-              debugLog(method, `Processing document file: ${file.mimetype}`);
-              
-              try {
-                // Use Gemini to analyze document WITH FILE BUFFER (for text extraction)
-                debugLog(method, `Calling Gemini analyzeDocument with BUFFER extraction...`);
-                const fileDesc = `Document: ${file.originalname}, Type: ${file.mimetype}, Size: ${file.size} bytes`;
-                
-                // ⬇️⬇️⬇️ CRITICAL CHANGE: Pass file buffer for local text extraction ⬇️⬇️⬇️
-                geminiSummary = await geminiService.analyzeDocument(
-                  fileUrl,           // Cloudinary URL
-                  fileDesc,          // File description
-                  file.buffer,       // FILE BUFFER for local extraction
-                  file.originalname, // File name
-                  file.mimetype      // MIME type
-                );
-                
-                debugLog(method, `Document analysis successful: ${geminiSummary.substring(0, 100)}...`);
-              } catch (docError) {
-                console.error(`[${method}] Document analysis ERROR:`, docError.message);
-                console.error(`[${method}] Stack:`, docError.stack);
-                geminiSummary = `${file.mimetype.split('/')[1]} document uploaded: ${file.originalname}`;
-                debugLog(method, `Using fallback summary: ${geminiSummary}`);
-              }
-              
-              // Generate smart title if user didn't provide one
-              if (!finalTitle) {
-                try {
-                  // Use filename as base, cleaned up
-                  const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
-                  const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
-                  
-                  // If we have a summary, try to generate better title from it
-                  if (geminiSummary && geminiSummary.length > 20) {
-                    try {
-                      finalTitle = await geminiService.generateTitleFromText(geminiSummary.substring(0, 500), 'note');
-                      debugLog(method, `Generated document title from summary: ${finalTitle}`);
-                    } catch (titleError) {
-                      console.error(`[${method}] Document title generation ERROR:`, titleError.message);
-                      finalTitle = cleaned || `Document ${new Date().toLocaleDateString()}`;
-                      debugLog(method, `Using cleaned filename as title: ${finalTitle}`);
-                    }
-                  } else {
-                    finalTitle = cleaned || `Document ${new Date().toLocaleDateString()}`;
-                    debugLog(method, `Using cleaned filename as title: ${finalTitle}`);
-                  }
-                } catch (error) {
-                  console.error(`[${method}] Title generation ERROR:`, error.message);
-                  finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-                  debugLog(method, `Using raw filename as title: ${finalTitle}`);
-                }
-              }
-            }
-            // For other note file types
-            else {
-              debugLog(method, `Unsupported note file type: ${file.mimetype}`);
-              if (!finalTitle) {
-                finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-                debugLog(method, `Using filename as title: ${finalTitle}`);
-              }
-            }
-          }
-          
-          // OTHER FILE TYPES (generic handling)
-          else if (!finalTitle) {
-            // Fallback for other file types
-            finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
-            debugLog(method, `Using filename as title: ${finalTitle}`);
-          }
-        } catch (uploadError) {
-          console.error(`[${method}] File upload ERROR:`, uploadError.message);
-          console.error(`[${method}] Stack:`, uploadError.stack);
-          return res.status(HTTP_STATUS.BAD_REQUEST).json({
-            success: false,
-            error: ERROR_MESSAGES.UPLOAD_FAILED
-          });
-        }
-      }
-      
-      // Handle notes and links (when no file or direct text input)
-      if ((type === 'note' || type === 'link') && recordContent && !geminiSummary) {
-        debugLog(method, `--- ${type.toUpperCase()} CONTENT PROCESSING ---`);
-        try {
-          geminiSummary = await geminiService.extractSummaryFromText(recordContent, type);
-          debugLog(method, `${type} summary generated: ${geminiSummary.substring(0, 100)}...`);
-        } catch (summaryError) {
-          console.error(`[${method}] ${type} summary ERROR:`, summaryError.message);
-          geminiSummary = type === 'link' ? 'Link saved' : 'Note content saved';
-          debugLog(method, `Using fallback: ${geminiSummary}`);
         }
         
-        // Generate smart title if user didn't provide one
-        if (!finalTitle) {
-          try {
-            if (type === 'link') {
-              finalTitle = await geminiService.generateTitleFromUrl(recordContent);
-              debugLog(method, `Generated link title: ${finalTitle}`);
-            } else {
-              finalTitle = await geminiService.generateTitleFromText(recordContent, 'note');
-              debugLog(method, `Generated note title: ${finalTitle}`);
+        // TEXT/DOCUMENT ANALYSIS (TXT, DOCX, PDF, etc.)
+        else if (type === 'note' || type === 'document') {
+          debugLog(method, '--- DOCUMENT ANALYSIS START ---');
+          debugLog(method, `Document type: ${file.mimetype}, Size: ${file.size} bytes`);
+          
+          // For plain text files, extract text and analyze
+          if (file.mimetype === 'text/plain') {
+            debugLog(method, 'Processing plain text file...');
+            try {
+              const fileContent = file.buffer.toString('utf-8');
+              debugLog(method, `Extracted ${fileContent.length} chars from text file`);
+              
+              try {
+                geminiSummary = await geminiService.extractSummaryFromText(fileContent, 'note');
+                debugLog(method, `Text summary generated: ${geminiSummary.substring(0, 100)}...`);
+              } catch (summaryError) {
+                console.error(`[${method}] Text summary ERROR:`, summaryError.message);
+                geminiSummary = `Text file: ${file.originalname}`;
+                debugLog(method, `Using fallback: ${geminiSummary}`);
+              }
+              
+              recordContent = fileContent;
+              
+              // Generate smart title if user didn't provide one OR provided generic title
+              if (!userProvidedTitle || isGenericTitle(finalTitle)) {
+                try {
+                  const geminiTitle = await geminiService.generateTitleFromText(fileContent, 'note');
+                  if (geminiTitle && geminiTitle.length > 5 && !isGenericTitle(geminiTitle)) {
+                    finalTitle = geminiTitle;
+                    debugLog(method, `Generated text title: ${finalTitle}`);
+                  }
+                } catch (titleError) {
+                  console.error(`[${method}] Text title ERROR:`, titleError.message);
+                }
+                
+                // Fallback to filename if no good title yet
+                if (!finalTitle || isGenericTitle(finalTitle)) {
+                  finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+                  debugLog(method, `Using filename title: ${finalTitle}`);
+                }
+              }
+            } catch (textError) {
+              console.error(`[${method}] Text extraction ERROR:`, textError);
+              geminiSummary = 'Text file uploaded - content extraction failed';
+              if (!finalTitle) {
+                finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+              }
+              debugLog(method, `Text extraction failed, using fallbacks`);
             }
-          } catch (titleError) {
-            console.error(`[${method}] ${type} title ERROR:`, titleError.message);
+          }
+          // For other document types (DOCX, PDF, etc.) - use BUFFER ANALYSIS
+          else if (file.mimetype.includes('document') || 
+                   file.mimetype.includes('pdf') || 
+                   file.mimetype.includes('msword') ||
+                   file.mimetype.includes('presentation') ||
+                   file.mimetype.includes('spreadsheet')) {
+            
+            debugLog(method, `Processing document file: ${file.mimetype}`);
+            
+            try {
+              // Use Gemini to analyze document WITH FILE BUFFER
+              debugLog(method, `Calling Gemini analyzeDocument with BUFFER extraction...`);
+              const fileDesc = `Document: ${file.originalname}, Type: ${file.mimetype}, Size: ${file.size} bytes`;
+              
+              geminiSummary = await geminiService.analyzeDocument(
+                fileUrl,           // Cloudinary URL
+                fileDesc,          // File description
+                file.buffer,       // FILE BUFFER for local extraction
+                file.originalname, // File name
+                file.mimetype      // MIME type
+              );
+              
+              debugLog(method, `Document analysis successful: ${geminiSummary.substring(0, 100)}...`);
+            } catch (docError) {
+              console.error(`[${method}] Document analysis ERROR:`, docError.message);
+              geminiSummary = `${file.mimetype.split('/')[1]} document uploaded: ${file.originalname}`;
+              debugLog(method, `Using fallback summary: ${geminiSummary}`);
+            }
+            
+            // Generate smart title if user didn't provide one OR provided generic title
+            if (!userProvidedTitle || isGenericTitle(finalTitle)) {
+              try {
+                // If we have a summary, try to generate better title from it
+                if (geminiSummary && geminiSummary.length > 50) {
+                  const geminiTitle = await geminiService.generateTitleFromText(geminiSummary.substring(0, 500), 'note');
+                  if (geminiTitle && geminiTitle.length > 5 && !isGenericTitle(geminiTitle)) {
+                    finalTitle = geminiTitle;
+                    debugLog(method, `Generated document title from summary: ${finalTitle}`);
+                  }
+                }
+              } catch (titleError) {
+                console.error(`[${method}] Document title generation ERROR:`, titleError.message);
+              }
+              
+              // Fallback to filename if no good title yet
+              if (!finalTitle || isGenericTitle(finalTitle)) {
+                const cleanName = file.originalname.replace(/\.[^/.]+$/, '');
+                const cleaned = cleanName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+                finalTitle = cleaned || `Document ${new Date().toLocaleDateString()}`;
+                debugLog(method, `Using cleaned filename as title: ${finalTitle}`);
+              }
+            }
+          }
+          // For other note file types
+          else {
+            debugLog(method, `Unsupported note file type: ${file.mimetype}`);
+            if (!finalTitle) {
+              finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+              debugLog(method, `Using filename as title: ${finalTitle}`);
+            }
+          }
+        }
+        
+        // OTHER FILE TYPES (generic handling)
+        else if (!finalTitle) {
+          // Fallback for other file types
+          finalTitle = file.originalname.replace(/\.[^/.]+$/, '');
+          debugLog(method, `Using filename as title: ${finalTitle}`);
+        }
+      } catch (uploadError) {
+        console.error(`[${method}] File upload ERROR:`, uploadError.message);
+        return res.status(HTTP_STATUS.BAD_REQUEST).json({
+          success: false,
+          error: ERROR_MESSAGES.UPLOAD_FAILED
+        });
+      }
+    }
+    
+    // Handle notes and links (when no file or direct text input)
+    if ((type === 'note' || type === 'link') && recordContent && !geminiSummary) {
+      debugLog(method, `--- ${type.toUpperCase()} CONTENT PROCESSING ---`);
+      try {
+        geminiSummary = await geminiService.extractSummaryFromText(recordContent, type);
+        debugLog(method, `${type} summary generated: ${geminiSummary.substring(0, 100)}...`);
+      } catch (summaryError) {
+        console.error(`[${method}] ${type} summary ERROR:`, summaryError.message);
+        geminiSummary = type === 'link' ? 'Link saved' : 'Note content saved';
+        debugLog(method, `Using fallback: ${geminiSummary}`);
+      }
+      
+      // CRITICAL FIX: Generate smart title if user didn't provide one OR provided generic title
+      if (!userProvidedTitle || isGenericTitle(finalTitle)) {
+        try {
+          let geminiTitle;
+          if (type === 'link') {
+            geminiTitle = await geminiService.generateTitleFromUrl(recordContent);
+            debugLog(method, `Generated link title: ${geminiTitle}`);
+          } else {
+            geminiTitle = await geminiService.generateTitleFromText(recordContent, 'note');
+            debugLog(method, `Generated note title: ${geminiTitle}`);
+          }
+          
+          // Only use Gemini title if it's good (not generic)
+          if (geminiTitle && geminiTitle.length > 5 && !isGenericTitle(geminiTitle)) {
+            finalTitle = geminiTitle;
+          } else if (!finalTitle) {
+            // Fallback only if no title exists
             if (type === 'link') {
               try {
                 const url = new URL(recordContent);
@@ -390,75 +440,84 @@ class RecordController {
             } else {
               // Extract first sentence as fallback
               const firstSentence = recordContent.split(/[.!?\n]/)[0].trim();
-              finalTitle = firstSentence || 'Note';
-              debugLog(method, `Using first sentence title: ${finalTitle}`);
+              if (firstSentence && firstSentence.length > 10) {
+                finalTitle = firstSentence;
+                debugLog(method, `Using first sentence title: ${finalTitle}`);
+              }
             }
+          }
+        } catch (titleError) {
+          console.error(`[${method}] ${type} title ERROR:`, titleError.message);
+          if (!finalTitle) {
+            finalTitle = geminiService.getDefaultTitle(type);
+            debugLog(method, `Using default title: ${finalTitle}`);
           }
         }
       }
-      
-      // If still no title, use default
-      if (!finalTitle) {
-        finalTitle = geminiService.getDefaultTitle(type);
-        debugLog(method, `Using default title: ${finalTitle}`);
-      }
-      
-      // Truncate title if too long
-      if (finalTitle.length > 100) {
-        finalTitle = finalTitle.substring(0, 97) + '...';
-        debugLog(method, `Truncated title to: ${finalTitle}`);
-      }
-      
-      // Ensure geminiSummary is not empty
-      if (!geminiSummary || geminiSummary.trim() === '') {
-        geminiSummary = 'Content analysis completed';
-        debugLog(method, `Setting default summary: ${geminiSummary}`);
-      }
-      
-      // Create record with smart title
-      const record = new Record({
-        user: req.user._id,
-        type,
-        title: finalTitle,
-        content: recordContent,
-        fileUrl,
-        cloudinaryPublicId,
-        geminiSummary: geminiSummary,
-        metadata,
-        tags: Array.isArray(tags) ? tags : []
-      });
-      
-      debugLog(method, 'Saving record to database...');
-      await record.save();
-      
-      debugLog(method, `=== RECORD CREATED SUCCESSFULLY ===`);
-      debugLog(method, `Type: ${type}, Title: "${finalTitle}", Summary length: ${geminiSummary.length}`);
-      
-      res.status(HTTP_STATUS.CREATED).json({
-        success: true,
-        message: SUCCESS_MESSAGES.RECORD_CREATED,
-        data: { record }
-      });
-    } catch (error) {
-      console.error(`[${method}] CRITICAL ERROR:`, error.message);
-      console.error(`[${method}] Stack:`, error.stack);
-      
-      // Clean up uploaded file if record creation fails
-      if (req.file && cloudinaryPublicId) {
-        try {
-          debugLog(method, `Cleaning up Cloudinary file: ${cloudinaryPublicId}`);
-          await cloudinaryService.deleteFile(cloudinaryPublicId);
-        } catch (cleanupError) {
-          console.error(`[${method}] Cleanup ERROR:`, cleanupError);
-        }
-      }
-      
-      res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-        success: false,
-        error: ERROR_MESSAGES.SERVER_ERROR
-      });
     }
+    
+    // If still no title, use default (only if truly empty)
+    if (!finalTitle || finalTitle.trim() === '') {
+      finalTitle = geminiService.getDefaultTitle(type);
+      debugLog(method, `Using default title: ${finalTitle}`);
+    }
+    
+    // Truncate title if too long
+    if (finalTitle.length > 100) {
+      finalTitle = finalTitle.substring(0, 97) + '...';
+      debugLog(method, `Truncated title to: ${finalTitle}`);
+    }
+    
+    // Ensure geminiSummary is not empty
+    if (!geminiSummary || geminiSummary.trim() === '') {
+      geminiSummary = 'Content analysis completed';
+      debugLog(method, `Setting default summary: ${geminiSummary}`);
+    }
+    
+    // Create record with smart title
+    const record = new Record({
+      user: req.user._id,
+      type,
+      title: finalTitle,
+      content: recordContent,
+      fileUrl,
+      cloudinaryPublicId,
+      geminiSummary: geminiSummary,
+      metadata,
+      tags: Array.isArray(tags) ? tags : []
+    });
+    
+    debugLog(method, 'Saving record to database...');
+    await record.save();
+    
+    debugLog(method, `=== RECORD CREATED SUCCESSFULLY ===`);
+    debugLog(method, `Type: ${type}, Title: "${finalTitle}", Summary length: ${geminiSummary.length}`);
+    
+    res.status(HTTP_STATUS.CREATED).json({
+      success: true,
+      message: SUCCESS_MESSAGES.RECORD_CREATED,
+      data: { record }
+    });
+  } catch (error) {
+    console.error(`[${method}] CRITICAL ERROR:`, error.message);
+    console.error(`[${method}] Stack:`, error.stack);
+    
+    // Clean up uploaded file if record creation fails
+    if (req.file && cloudinaryPublicId) {
+      try {
+        debugLog(method, `Cleaning up Cloudinary file: ${cloudinaryPublicId}`);
+        await cloudinaryService.deleteFile(cloudinaryPublicId);
+      } catch (cleanupError) {
+        console.error(`[${method}] Cleanup ERROR:`, cleanupError);
+      }
+    }
+    
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+      success: false,
+      error: ERROR_MESSAGES.SERVER_ERROR
+    });
   }
+}
 
   // Update record
   async updateRecord(req, res) {
@@ -585,3 +644,4 @@ class RecordController {
 }
 
 module.exports = new RecordController();
+
