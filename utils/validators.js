@@ -41,12 +41,14 @@ const recordValidators = {
     body('type')
       .isIn(['note', 'image', 'audio', 'video', 'link']).withMessage('Invalid record type'),
     
+    // Title is optional (AI will generate if empty)
     body('title')
+      .optional()
       .trim()
-      .isLength({ min: 1, max: 200 }).withMessage('Title must be between 1 and 200 characters'),
+      .isLength({ min: 0, max: 200 }).withMessage('Title cannot exceed 200 characters'), // Change min to 0
     
     body('content')
-      .optional()
+      .optional() // Still optional for images/audio/video
       .isString()
       .trim(),
     
@@ -57,6 +59,27 @@ const recordValidators = {
     body('metadata')
       .optional()
       .isObject().withMessage('Metadata must be an object')
+  ],
+
+  // Create separate validator for text-only records
+  createText: [
+    body('type')
+      .isIn(['note', 'link']).withMessage('Text records must be note or link type'),
+    
+    body('title')
+      .optional()
+      .trim()
+      .isLength({ min: 0, max: 200 }).withMessage('Title cannot exceed 200 characters'),
+    
+    // Content is REQUIRED for notes and links
+    body('content')
+      .isString().withMessage('Content is required for notes and links')
+      .trim()
+      .notEmpty().withMessage('Content cannot be empty'),
+    
+    body('tags')
+      .optional()
+      .isArray().withMessage('Tags must be an array')
   ],
 
   update: [
@@ -116,3 +139,4 @@ module.exports = {
   recordValidators,
   searchValidators
 };
+
