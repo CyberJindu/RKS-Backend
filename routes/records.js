@@ -41,6 +41,13 @@ router.post(
   recordController.createRecord
 );
 
+// POST /api/records/text - Create text-only record (notes/links without files)
+router.post(
+  '/text',
+  validate(recordValidators.create),
+  recordController.createRecord
+);
+
 // PUT /api/records/:id - Update record
 router.put(
   '/:id',
