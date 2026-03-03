@@ -391,84 +391,99 @@ async generateTitleFromUrl(url, content = '') {
   }
 }
 
+  detectQuotedPhrases(query) {
+  const phrases = [];
+  const quoteMatches = query.match(/"([^"]+)"/g);
+  if (quoteMatches) {
+    phrases.push(...quoteMatches.map(q => q.replace(/"/g, '')));
+  }
+  return phrases;
+}
+
   // === SEARCH QUERY PROCESSING ===
-  async processSearchQuery(query, recordTypes = []) {
-    const method = 'processSearchQuery';
-    debugLog(method, `Starting for query: "${query}"`); // ⬅️ Changed
+async processSearchQuery(query, recordTypes = []) {
+  const method = 'processSearchQuery';
+  debugLog(method, `Starting for query: "${query}"`);
+  
+  try {
+    // Before sending to Gemini, check for quoted phrases
+    const quotedPhrases = this.detectQuotedPhrases(query);
+    if (quotedPhrases.length > 0) {
+      // Prioritize quoted phrases in the prompt
+    const prompt = `Convert this search query into structured search parameters.
     
-    try {
-      const prompt = `Convert this natural language search query into structured search parameters.
-      
-      IMPORTANT: Keep phrases together. For example:
-      - "new plot" should return keywords: ["new plot"] not ["new", "plot"]
-      - "keepson structure" should return keywords: ["keepson structure"]
-      - If query is "find my meeting notes", return keywords: ["meeting notes"]
-      - For "I want to find that document called keepson", extract "keepson" as keyword
-      
-      User Query: "${query}"
+    QUERY: "${query}"
 
-      Please extract:
-      1. Main keywords to search for (keep phrases intact)
-      2. Date references (if any)
-      3. File type preferences (note, image, audio, video, link)
-      4. Context or additional filters
+    IMPORTANT: The user specifically quoted: "${quotedPhrases.join('", "')}"
+    These phrases MUST be kept together and treated as primary.
+    
+    IMPORTANT RULES:
+    1. Remove stop words (a, an, the, and, or, but, in, on, at, near, for, to, from)
+    2. Keep meaningful phrases together (e.g., "meeting notes", "birthday party")
+    3. Identify the MOST important keywords (2-4 words maximum)
+    4. Detect file types mentioned
+    
+    Return as JSON ONLY with:
+    {
+      "primaryKeywords": ["most", "important", "words"],
+      "secondaryKeywords": ["less", "important", "words"],
+      "phrases": ["keep phrases together"],
+      "detectedTypes": ["image", "note", etc],
+      "hasDate": true/false,
+      "hasLocation": true/false
+    }
+    
+    Available types: ${recordTypes.join(', ')}`;
 
-      Return as a JSON object with these fields:
-      - keywords: array of main search terms (keep phrases together)
-      - dateFilters: object with from/to dates if mentioned
-      - types: array of preferred record types
-      - context: additional context from the query
+    const result = await this.model.generateContent(prompt);
+    const response = await result.response;
+    const rawResponse = response.text().trim();
+    
+    // Parse and return structured data
+    const parsed = JSON.parse(rawResponse.match(/\{[\s\S]*\}/)[0]);
+    
+    // Convert to format expected by universal search
+    return {
+      keywords: [...parsed.primaryKeywords, ...parsed.secondaryKeywords],
+      primaryKeywords: parsed.primaryKeywords,
+      secondaryKeywords: parsed.secondaryKeywords,
+      phrases: parsed.phrases,
+      types: parsed.detectedTypes,
+      dateFilters: parsed.hasDate ? {} : null,
+      context: query
+    };
+    
+  } catch (error) {
+    // Fallback to intelligent manual extraction
+    return this.intelligentManualExtraction(query);
+  }
+}
 
-      Available record types: ${recordTypes.join(', ')}
-
-      Response must be valid JSON only.`;
-
-      debugLog(method, 'Sending to Gemini for processing...'); // ⬅️ Changed
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const rawResponse = response.text().trim();
-      
-      debugLog(method, `Gemini raw response: ${rawResponse.substring(0, 200)}...`); // ⬅️ Changed
-      
-      // Parse JSON from response
-      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          debugLog(method, `Successfully parsed:`, parsed); // ⬅️ Changed
-          return parsed;
-        } catch (parseError) {
-          console.error(`[${method}] JSON parse error: ${parseError.message}`);
-          debugLog(method, `Failed to parse JSON, using fallback`); // ⬅️ Changed
-        }
-      }
-      
-      // Fallback: Extract keywords manually
-      const fallbackKeywords = this.extractKeywordsManually(query);
-      debugLog(method, `Using manual extraction: ${JSON.stringify(fallbackKeywords)}`); // ⬅️ Changed
-      
-      return { 
-        keywords: fallbackKeywords.keywords,
-        types: fallbackKeywords.types,
-        dateFilters: null,
-        context: query
-      };
-      
-    } catch (error) {
-      console.error(`[${method}] CRITICAL ERROR: ${error.message}`);
-      console.error(`[${method}] Stack:`, error.stack);
-      
-      // Manual keyword extraction as last resort
-      const manualKeywords = this.extractKeywordsManually(query);
-      return { 
-        keywords: manualKeywords.keywords,
-        types: [],
-        dateFilters: null,
-        context: query
-      };
+// New method for intelligent manual extraction
+intelligentManualExtraction(query) {
+  const STOP_WORDS = ['a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'near', 'for', 'to', 'from', 'with', 'without'];
+  
+  const words = query.toLowerCase().split(/\s+/);
+  const meaningfulWords = words.filter(w => w.length > 2 && !STOP_WORDS.includes(w));
+  
+  // Detect potential phrases (2-3 word sequences)
+  const phrases = [];
+  for (let i = 0; i < words.length - 1; i++) {
+    if (!STOP_WORDS.includes(words[i]) || !STOP_WORDS.includes(words[i + 1])) {
+      phrases.push(words[i] + ' ' + words[i + 1]);
     }
   }
-
+  
+  return {
+    keywords: meaningfulWords,
+    primaryKeywords: meaningfulWords.slice(0, 3), // First 3 words as primary
+    secondaryKeywords: meaningfulWords.slice(3),
+    phrases: phrases.slice(0, 3), // Top 3 phrases
+    types: [],
+    dateFilters: null,
+    context: query
+  };
+}
   // Manual keyword extraction for fallback
   extractKeywordsManually(query) {
     const method = 'extractKeywordsManually';
@@ -721,6 +736,7 @@ extractImageTitleFromDescription(description) {
 }
 
 module.exports = new GeminiService();
+
 
 
 
