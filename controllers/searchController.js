@@ -35,10 +35,10 @@ const generateAllSearchPatterns = (query) => {
   }
   
   // Individual words (longer than 2 chars) - FILTER STOP WORDS
-  const STOP_WORDS = ['the', 'and', 'was', 'were', 'that', 'this', 'with', 'from', 'have', 'had', 'about', 'a', 'an'];
+  const STOP_WORDS = ['the', 'and', 'was', 'were', 'that', 'this', 'with', 'from', 'have', 'had', 'about', 'a', 'an', 'for', 'im', 'i\'m', 'looking', 'file'];
   const words = query.split(' ')
-    .filter(word => word.length > 2 && !STOP_WORDS.includes(word.toLowerCase()))
-    .map(word => word.toLowerCase());
+    .filter(word => word.length > 2 && !STOP_WORDS.includes(word.toLowerCase().replace(/'/g, '')))
+    .map(word => word.toLowerCase().replace(/'/g, ''));
   
   words.forEach(word => patterns.add(word));
   
@@ -60,64 +60,79 @@ const generateAllSearchPatterns = (query) => {
 }
 
 class SearchController {
-  // Calculate relevance scores for better ranking
-  calculateRelevanceScores(records, parsedQuery) {
-    if (!records || !Array.isArray(records)) return [];
-    if (!parsedQuery) return records;
-    
-    return records.map(record => {
-      let score = 0;
-      const recordObj = record.toObject ? record.toObject() : record;
-      const recordContent = `${recordObj.title || ''} ${recordObj.geminiSummary || ''} ${recordObj.content || ''}`.toLowerCase();
-      
-      // Score for primary keywords (highest weight)
-      if (parsedQuery.primaryKeywords && parsedQuery.primaryKeywords.length > 0) {
-        parsedQuery.primaryKeywords.forEach(keyword => {
-          const keywordLower = keyword.toLowerCase();
-          const regex = new RegExp(keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-          const matches = (recordContent.match(regex) || []).length;
-          score += matches * 10;
-          
-          // Bonus for title matches
-          if (recordObj.title && recordObj.title.toLowerCase().includes(keywordLower)) {
-            score += 15;
-          }
-          
-          // Bonus for exact word boundary matches
-          const wordBoundaryRegex = new RegExp(`\\b${keywordLower}\\b`, 'g');
-          const exactMatches = (recordContent.match(wordBoundaryRegex) || []).length;
-          score += exactMatches * 5;
-        });
-      }
-      
-      // Score for secondary keywords
-      if (parsedQuery.secondaryKeywords && parsedQuery.secondaryKeywords.length > 0) {
-        parsedQuery.secondaryKeywords.forEach(keyword => {
-          const keywordLower = keyword.toLowerCase();
-          const regex = new RegExp(keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-          const matches = (recordContent.match(regex) || []).length;
-          score += matches * 3;
-        });
-      }
-      
-      // Score for phrases (highest bonus)
-      if (parsedQuery.phrases && parsedQuery.phrases.length > 0) {
-        parsedQuery.phrases.forEach(phrase => {
-          if (recordContent.includes(phrase.toLowerCase())) {
-            score += 20;
-          }
-        });
-      }
-      
-      return {
-        ...recordObj,
-        relevanceScore: Math.min(100, score)
-      };
-    });
+  constructor() {
+    // Bind all methods to ensure 'this' works correctly
+    this.naturalSearch = this.naturalSearch.bind(this);
+    this.advancedSearch = this.advancedSearch.bind(this);
+    this.calculateRelevanceScores = this.calculateRelevanceScores.bind(this);
   }
 
-  // Natural language search
-  async naturalSearch(req, res) {
+  // Calculate relevance scores for better ranking
+  calculateRelevanceScores(records, parsedQuery) {
+    try {
+      if (!records || !Array.isArray(records)) return [];
+      if (!parsedQuery) return records;
+      
+      return records.map(record => {
+        let score = 0;
+        const recordObj = record.toObject ? record.toObject() : record;
+        const recordContent = `${recordObj.title || ''} ${recordObj.geminiSummary || ''} ${recordObj.content || ''}`.toLowerCase();
+        
+        // Score for primary keywords (highest weight)
+        if (parsedQuery.primaryKeywords && parsedQuery.primaryKeywords.length > 0) {
+          parsedQuery.primaryKeywords.forEach(keyword => {
+            if (!keyword) return;
+            const keywordLower = keyword.toLowerCase();
+            const regex = new RegExp(keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+            const matches = (recordContent.match(regex) || []).length;
+            score += matches * 10;
+            
+            // Bonus for title matches
+            if (recordObj.title && recordObj.title.toLowerCase().includes(keywordLower)) {
+              score += 15;
+            }
+            
+            // Bonus for exact word boundary matches
+            const wordBoundaryRegex = new RegExp(`\\b${keywordLower}\\b`, 'g');
+            const exactMatches = (recordContent.match(wordBoundaryRegex) || []).length;
+            score += exactMatches * 5;
+          });
+        }
+        
+        // Score for secondary keywords
+        if (parsedQuery.secondaryKeywords && parsedQuery.secondaryKeywords.length > 0) {
+          parsedQuery.secondaryKeywords.forEach(keyword => {
+            if (!keyword) return;
+            const keywordLower = keyword.toLowerCase();
+            const regex = new RegExp(keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+            const matches = (recordContent.match(regex) || []).length;
+            score += matches * 3;
+          });
+        }
+        
+        // Score for phrases (highest bonus)
+        if (parsedQuery.phrases && parsedQuery.phrases.length > 0) {
+          parsedQuery.phrases.forEach(phrase => {
+            if (!phrase) return;
+            if (recordContent.includes(phrase.toLowerCase())) {
+              score += 20;
+            }
+          });
+        }
+        
+        return {
+          ...recordObj,
+          relevanceScore: Math.min(100, score)
+        };
+      });
+    } catch (error) {
+      console.error('Error calculating relevance scores:', error);
+      return records;
+    }
+  }
+
+  // Natural language search - NOW USING ARROW FUNCTION TO PRESERVE 'this'
+  naturalSearch = async (req, res) => {
     const method = 'naturalSearch';
     debugLog(method, '=== STARTING SEARCH ===');
     
@@ -195,8 +210,8 @@ class SearchController {
           }
         );
         
-        debugLog(method, 'Universal query parsed:', universalResult.parsedQuery);
-        debugLog(method, `Generated ${universalResult.searchPatterns?.length || 0} search patterns`);
+        debugLog(method, 'Universal query parsed:', universalResult?.parsedQuery);
+        debugLog(method, `Generated ${universalResult?.searchPatterns?.length || 0} search patterns`);
       } catch (universalError) {
         debugLog(method, `Universal service error: ${universalError.message}`);
         universalResult = null;
@@ -227,8 +242,8 @@ class SearchController {
         }
         
         usedParsedQuery = {
-          primaryKeywords: searchParams.primaryKeywords || universalResult.parsedQuery?.primaryKeywords || [],
-          secondaryKeywords: searchParams.secondaryKeywords || universalResult.parsedQuery?.secondaryKeywords || [],
+          primaryKeywords: [...(searchParams.primaryKeywords || []), ...(universalResult.parsedQuery?.primaryKeywords || [])],
+          secondaryKeywords: [...(searchParams.secondaryKeywords || []), ...(universalResult.parsedQuery?.secondaryKeywords || [])],
           phrases: [...(searchParams.phrases || []), ...(universalResult.parsedQuery?.phrases || [])]
         };
       } else if (universalResult) {
@@ -249,6 +264,14 @@ class SearchController {
           searchPatterns.push(...searchParams.phrases);
         }
         
+        // If no patterns, use meaningful words from query
+        if (searchPatterns.length === 0) {
+          const words = query.split(' ')
+            .filter(word => word.length > 3)
+            .filter(word => !['the', 'and', 'was', 'for', 'that', 'this', 'with', 'from', 'have', 'had', 'about', 'looking', 'file'].includes(word.toLowerCase()));
+          searchPatterns.push(...words);
+        }
+        
         const keywordConditions = searchPatterns.flatMap(pattern => [
           { title: { $regex: escapeRegex(pattern), $options: 'i' } },
           { geminiSummary: { $regex: escapeRegex(pattern), $options: 'i' } },
@@ -264,8 +287,14 @@ class SearchController {
         
         usedParsedQuery = searchParams;
       } else {
-        // No enhancement available, use basic search
-        const searchTerms = generateAllSearchPatterns(query);
+        // No enhancement available, use basic search with stop word filtering
+        const STOP_WORDS = ['the', 'and', 'was', 'were', 'that', 'this', 'with', 'from', 'have', 'had', 'about', 'a', 'an', 'for', 'im', 'i\'m', 'looking', 'file'];
+        const words = query.split(' ')
+          .filter(word => word.length > 2 && !STOP_WORDS.includes(word.toLowerCase().replace(/'/g, '')))
+          .map(word => word.toLowerCase().replace(/'/g, ''));
+        
+        const searchTerms = words.length > 0 ? words : [query];
+        
         const keywordConditions = searchTerms.flatMap(term => [
           { title: { $regex: escapeRegex(term), $options: 'i' } },
           { geminiSummary: { $regex: escapeRegex(term), $options: 'i' } },
@@ -277,7 +306,7 @@ class SearchController {
         usedParsedQuery = {
           primaryKeywords: searchTerms.slice(0, 3),
           secondaryKeywords: searchTerms.slice(3, 6),
-          phrases: [query]
+          phrases: []
         };
       }
       
@@ -289,6 +318,7 @@ class SearchController {
       debugLog(method, `Enhanced search found: ${enhancedResults.length} records`);
       
       if (enhancedResults.length > 0) {
+        // THIS LINE WAS CAUSING THE ERROR - NOW FIXED WITH BINDING
         const scoredResults = this.calculateRelevanceScores(enhancedResults, usedParsedQuery);
         scoredResults.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
         
@@ -369,7 +399,7 @@ class SearchController {
   }
 
   // Advanced search with filters
-  async advancedSearch(req, res) {
+  advancedSearch = async (req, res) => {
     const method = 'advancedSearch';
     debugLog(method, 'Starting advanced search');
     
