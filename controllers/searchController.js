@@ -1,5 +1,6 @@
 const Record = require('../models/Record');
 const geminiService = require('../services/geminiService');
+const universalSearchService = require('../services/universalSearchService'); // ADD THIS LINE
 const { ERROR_MESSAGES, HTTP_STATUS, SEARCH_DEFAULTS } = require('../utils/constants');
 
 // Debug logger - MOVED OUTSIDE CLASS
@@ -79,87 +80,149 @@ class SearchController {
       debugLog(method, `Query received: "${query}"`);
       debugLog(method, `User ID: ${req.user._id}`);
       
-      // === TIER 1: DIRECT SEARCH ===
-      debugLog(method, '--- TIER 1: Direct Search ---');
-      const directSearchQuery = {
+      // === TIER 1: DIRECT SEARCH (Exact phrase matches) ===
+      debugLog(method, '--- TIER 1: Direct Phrase Search ---');
+      
+      // Check for quoted phrases first
+      const phraseMatches = query.match(/"([^"]+)"/g);
+      const exactPhrases = phraseMatches 
+        ? phraseMatches.map(q => q.replace(/"/g, ''))
+        : [query]; // If no quotes, use the whole query as phrase
+      
+      const exactQuery = {
         user: req.user._id,
-        $or: [
-          { title: { $regex: query, $options: 'i' } },
-          { geminiSummary: { $regex: query, $options: 'i' } },
-          { content: { $regex: query, $options: 'i' } },
-          { tags: { $regex: query, $options: 'i' } }
-        ]
+        $or: exactPhrases.map(phrase => ({
+          $or: [
+            { title: { $regex: new RegExp(`\\b${escapeRegex(phrase)}\\b`, 'i') } },
+            { geminiSummary: { $regex: new RegExp(`\\b${escapeRegex(phrase)}\\b`, 'i') } },
+            { content: { $regex: new RegExp(`\\b${escapeRegex(phrase)}\\b`, 'i') } },
+            { tags: { $regex: new RegExp(`\\b${escapeRegex(phrase)}\\b`, 'i') } }
+          ]
+        }))
       };
       
-      debugLog(method, 'Direct query:', directSearchQuery);
+      debugLog(method, 'Exact phrase query:', exactQuery);
       
-      const directResults = await Record.find(directSearchQuery)
+      const exactResults = await Record.find(exactQuery)
         .sort({ createdAt: -1 })
         .limit(SEARCH_DEFAULTS.LIMIT);
       
-      debugLog(method, `Direct search found: ${directResults.length} records`);
+      debugLog(method, `Exact phrase search found: ${exactResults.length} records`);
       
-      if (directResults.length > 0) {
-        debugLog(method, `Direct match titles:`, directResults.map(r => r.title));
+      if (exactResults.length > 0) {
+        debugLog(method, `Exact match titles:`, exactResults.map(r => r.title));
         return res.status(HTTP_STATUS.OK).json({
           success: true,
           data: {
             query,
-            searchType: 'direct',
-            records: directResults,
-            count: directResults.length
+            searchType: 'exact',
+            records: exactResults,
+            count: exactResults.length
           }
         });
       }
       
-      // === TIER 2: GEMINI-ENHANCED SEARCH ===
-      debugLog(method, '--- TIER 2: Gemini-Enhanced Search ---');
+      // === TIER 2: UNIVERSAL SEARCH WITH GEMINI ENHANCEMENT ===
+      debugLog(method, '--- TIER 2: Universal Search with Gemini Enhancement ---');
+      
       try {
-        debugLog(method, 'Calling Gemini processSearchQuery...');
+        // Use universal search service to process the query
+        debugLog(method, 'Calling universalSearchService.processUniversalQuery...');
+        const universalResult = await universalSearchService.processUniversalQuery(
+          query,
+          { 
+            userId: req.user._id,
+            userTypes: [] // No type preference initially
+          }
+        );
+        
+        debugLog(method, 'Universal query parsed:', universalResult.parsedQuery);
+        debugLog(method, `Generated ${universalResult.searchPatterns.length} search patterns`);
+        
+        // Now call Gemini to enhance the understanding
+        debugLog(method, 'Calling Gemini for enhanced understanding...');
         const searchParams = await geminiService.processSearchQuery(query, ['note', 'image', 'audio', 'video', 'link']);
         debugLog(method, 'Gemini returned:', searchParams);
         
-        // Build enhanced search query
+        // Merge Gemini's understanding with universal patterns
+        // Use Gemini's type detection if available
+        if (searchParams.types && searchParams.types.length > 0) {
+          universalResult.mongoQuery.type = { $in: searchParams.types };
+          debugLog(method, `Applied type filter from Gemini: ${searchParams.types.join(', ')}`);
+        }
+        
+        // Add date filters if Gemini detected them
+        if (searchParams.dateFilters && Object.keys(searchParams.dateFilters).length > 0) {
+          universalResult.mongoQuery.createdAt = searchParams.dateFilters;
+          debugLog(method, 'Applied date filters from Gemini');
+        }
+        
+        debugLog(method, 'Final enhanced universal query:', universalResult.mongoQuery);
+        
+        // Execute search with weighted query
+        const enhancedResults = await Record.find(universalResult.mongoQuery)
+          .sort({ createdAt: -1 })
+          .limit(SEARCH_DEFAULTS.LIMIT);
+        
+        debugLog(method, `Universal search found: ${enhancedResults.length} records`);
+        
+        if (enhancedResults.length > 0) {
+          // Calculate relevance scores for better ranking
+          const scoredResults = this.calculateRelevanceScores(
+            enhancedResults, 
+            universalResult.parsedQuery
+          );
+          
+          // Sort by relevance score (highest first)
+          scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore);
+          
+          debugLog(method, `Top result: "${scoredResults[0].title}" (score: ${scoredResults[0].relevanceScore})`);
+          
+          return res.status(HTTP_STATUS.OK).json({
+            success: true,
+            data: {
+              query,
+              searchType: 'universal',
+              processedQuery: {
+                ...searchParams,
+                parsedQuery: universalResult.parsedQuery
+              },
+              records: scoredResults,
+              count: scoredResults.length
+            }
+          });
+        }
+        
+        // If no results with enhanced search, try Gemini's enhanced search as fallback
+        debugLog(method, 'No results from universal search, trying Gemini-enhanced search...');
+        
+        // Build enhanced search query using Gemini's keywords
         const enhancedQuery = { user: req.user._id };
         const searchPatterns = [];
         
-        // Process keywords from Gemini
         if (searchParams.keywords && searchParams.keywords.length > 0) {
-          debugLog(method, `Processing ${searchParams.keywords.length} keywords from Gemini`);
-          
-          searchParams.keywords.forEach((keyword, index) => {
-            debugLog(method, `Keyword ${index + 1}: "${keyword}"`);
-            
-            // Add the keyword as-is
+          searchParams.keywords.forEach(keyword => {
             searchPatterns.push(keyword);
             
-            // If keyword contains spaces, also search without spaces
             if (keyword.includes(' ')) {
               const noSpaces = keyword.replace(/\s+/g, '');
               searchPatterns.push(noSpaces);
-              debugLog(method, `  -> No spaces variant: "${noSpaces}"`);
               
-              // Also try partial matches
               const words = keyword.split(' ');
               if (words.length > 1) {
-                searchPatterns.push(...words);
-                debugLog(method, `  -> Individual words: ${words.join(', ')}`);
+                // Filter out stop words for individual word search
+                const meaningfulWords = words.filter(word => 
+                  word.length > 2 && !['a', 'an', 'the', 'and', 'or', 'but', 'for', 'near'].includes(word.toLowerCase())
+                );
+                searchPatterns.push(...meaningfulWords);
               }
             }
           });
-        } else {
-          debugLog(method, 'No keywords from Gemini, using query directly');
-          searchPatterns.push(query);
-          if (query.includes(' ')) {
-            searchPatterns.push(query.replace(/\s+/g, ''));
-          }
         }
         
-        // Add all variations we can think of
-        const allVariations = [...new Set(searchPatterns)]; // Remove duplicates
-        debugLog(method, `All search patterns (${allVariations.length}):`, allVariations);
+        const allVariations = [...new Set(searchPatterns)];
+        debugLog(method, `Gemini patterns (${allVariations.length}):`, allVariations);
         
-        // Build search conditions - USING escapeRegex HELPER FUNCTION
         const keywordConditions = allVariations.flatMap(pattern => [
           { title: { $regex: escapeRegex(pattern), $options: 'i' } },
           { geminiSummary: { $regex: escapeRegex(pattern), $options: 'i' } },
@@ -169,56 +232,24 @@ class SearchController {
         
         enhancedQuery.$or = keywordConditions;
         
-        // Add type filter
         if (searchParams.types && searchParams.types.length > 0) {
           enhancedQuery.type = { $in: searchParams.types };
-          debugLog(method, `Type filter: ${searchParams.types.join(', ')}`);
         }
         
-        // Add date filter if available
-        if (searchParams.dateFilters) {
-          const dateQuery = {};
-          if (searchParams.dateFilters.from) {
-            try {
-              dateQuery.$gte = new Date(searchParams.dateFilters.from);
-              debugLog(method, `Date from: ${searchParams.dateFilters.from}`);
-            } catch (dateError) {
-              console.error('Date parsing error:', dateError);
-            }
-          }
-          if (searchParams.dateFilters.to) {
-            try {
-              dateQuery.$lte = new Date(searchParams.dateFilters.to);
-              debugLog(method, `Date to: ${searchParams.dateFilters.to}`);
-            } catch (dateError) {
-              console.error('Date parsing error:', dateError);
-            }
-          }
-          if (Object.keys(dateQuery).length > 0) {
-            enhancedQuery.createdAt = dateQuery;
-          }
-        }
-        
-        debugLog(method, 'Final enhanced query:', enhancedQuery);
-        
-        // Execute enhanced search
-        const enhancedResults = await Record.find(enhancedQuery)
+        const geminiResults = await Record.find(enhancedQuery)
           .sort({ createdAt: -1 })
           .limit(SEARCH_DEFAULTS.LIMIT);
         
-        debugLog(method, `Enhanced search found: ${enhancedResults.length} records`);
-        if (enhancedResults.length > 0) {
-          debugLog(method, `Found titles:`, enhancedResults.map(r => r.title));
-        }
+        debugLog(method, `Gemini-enhanced search found: ${geminiResults.length} records`);
         
         return res.status(HTTP_STATUS.OK).json({
           success: true,
           data: {
             query,
-            searchType: 'enhanced',
+            searchType: 'gemini-enhanced',
             processedQuery: searchParams,
-            records: enhancedResults,
-            count: enhancedResults.length
+            records: geminiResults,
+            count: geminiResults.length
           }
         });
         
@@ -226,42 +257,90 @@ class SearchController {
         console.error(`[${method}] Gemini processing failed:`, geminiError.message);
         console.error(`[${method}] Stack:`, geminiError.stack);
         
-        // === TIER 3: SMART FALLBACK SEARCH ===
-        debugLog(method, '--- TIER 3: Smart Fallback Search ---');
+        // === TIER 3: UNIVERSAL FALLBACK SEARCH (without Gemini) ===
+        debugLog(method, '--- TIER 3: Universal Fallback Search ---');
         
-        const fallbackQuery = {
+        try {
+          // Use universal search service without Gemini
+          const fallbackUniversalResult = await universalSearchService.processUniversalQuery(
+            query,
+            { 
+              userId: req.user._id,
+              userTypes: []
+            }
+          );
+          
+          debugLog(method, 'Fallback universal query parsed:', fallbackUniversalResult.parsedQuery);
+          
+          const fallbackResults = await Record.find(fallbackUniversalResult.mongoQuery)
+            .sort({ createdAt: -1 })
+            .limit(SEARCH_DEFAULTS.LIMIT);
+          
+          debugLog(method, `Fallback universal search found: ${fallbackResults.length} records`);
+          
+          if (fallbackResults.length > 0) {
+            const scoredResults = this.calculateRelevanceScores(
+              fallbackResults, 
+              fallbackUniversalResult.parsedQuery
+            );
+            
+            scoredResults.sort((a, b) => b.relevanceScore - a.relevanceScore);
+            
+            return res.status(HTTP_STATUS.OK).json({
+              success: true,
+              data: {
+                query,
+                searchType: 'universal-fallback',
+                processedQuery: fallbackUniversalResult.parsedQuery,
+                records: scoredResults,
+                count: scoredResults.length
+              }
+            });
+          }
+        } catch (fallbackError) {
+          console.error(`[${method}] Universal fallback failed:`, fallbackError.message);
+        }
+        
+        // === TIER 4: LEGACY SMART FALLBACK SEARCH (last resort) ===
+        debugLog(method, '--- TIER 4: Legacy Smart Fallback Search ---');
+        
+        const legacyFallbackQuery = {
           user: req.user._id,
           $or: []
         };
 
-        // Generate ALL possible search patterns - USING generateAllSearchPatterns HELPER
+        // Generate ALL possible search patterns
         const searchTerms = generateAllSearchPatterns(query);
-        debugLog(method, `Generated ${searchTerms.length} search patterns:`, searchTerms);
+        debugLog(method, `Generated ${searchTerms.length} legacy patterns:`, searchTerms);
 
-        // Create search conditions for all terms
-        const fallbackConditions = searchTerms.flatMap(term => [
+        // Filter out stop words from individual terms
+        const filteredTerms = searchTerms.filter(term => 
+          term.length > 2 && !['a', 'an', 'the', 'and', 'or', 'but', 'for', 'near'].includes(term.toLowerCase())
+        );
+
+        const fallbackConditions = filteredTerms.flatMap(term => [
           { title: { $regex: escapeRegex(term), $options: 'i' } },
           { geminiSummary: { $regex: escapeRegex(term), $options: 'i' } },
           { content: { $regex: escapeRegex(term), $options: 'i' } },
           { tags: { $regex: escapeRegex(term), $options: 'i' } }
         ]);
 
-        fallbackQuery.$or = fallbackConditions;
-        debugLog(method, 'Fallback query conditions:', fallbackConditions.length);
+        legacyFallbackQuery.$or = fallbackConditions;
+        debugLog(method, 'Legacy fallback query conditions:', fallbackConditions.length);
 
-        const fallbackResults = await Record.find(fallbackQuery)
+        const legacyResults = await Record.find(legacyFallbackQuery)
           .sort({ createdAt: -1 })
           .limit(SEARCH_DEFAULTS.LIMIT);
         
-        debugLog(method, `Fallback search found: ${fallbackResults.length} records`);
+        debugLog(method, `Legacy fallback search found: ${legacyResults.length} records`);
         
         return res.status(HTTP_STATUS.OK).json({
           success: true,
           data: {
             query,
-            searchType: 'fallback',
-            records: fallbackResults,
-            count: fallbackResults.length
+            searchType: 'legacy-fallback',
+            records: legacyResults,
+            count: legacyResults.length
           }
         });
       }
@@ -278,6 +357,67 @@ class SearchController {
         debug: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
+  }
+
+  // Calculate relevance scores for better ranking
+  calculateRelevanceScores(records, parsedQuery) {
+    return records.map(record => {
+      let score = 0;
+      const recordContent = `${record.title || ''} ${record.geminiSummary || ''} ${record.content || ''}`.toLowerCase();
+      
+      // Score for primary keywords (highest weight)
+      if (parsedQuery.primaryKeywords && parsedQuery.primaryKeywords.length > 0) {
+        parsedQuery.primaryKeywords.forEach(keyword => {
+          const regex = new RegExp(keyword.toLowerCase(), 'g');
+          const matches = (recordContent.match(regex) || []).length;
+          score += matches * 10; // Primary keywords worth 10 points each
+          
+          // Bonus for title matches
+          if (record.title && record.title.toLowerCase().includes(keyword.toLowerCase())) {
+            score += 15;
+          }
+          
+          // Bonus for exact word boundary matches
+          const wordBoundaryRegex = new RegExp(`\\b${keyword.toLowerCase()}\\b`, 'g');
+          const exactMatches = (recordContent.match(wordBoundaryRegex) || []).length;
+          score += exactMatches * 5;
+        });
+      }
+      
+      // Score for secondary keywords
+      if (parsedQuery.secondaryKeywords && parsedQuery.secondaryKeywords.length > 0) {
+        parsedQuery.secondaryKeywords.forEach(keyword => {
+          const regex = new RegExp(keyword.toLowerCase(), 'g');
+          const matches = (recordContent.match(regex) || []).length;
+          score += matches * 3; // Secondary keywords worth 3 points each
+        });
+      }
+      
+      // Score for phrases (highest bonus)
+      if (parsedQuery.phrases && parsedQuery.phrases.length > 0) {
+        parsedQuery.phrases.forEach(phrase => {
+          if (recordContent.includes(phrase.toLowerCase())) {
+            score += 20; // Big bonus for phrase matches
+          }
+        });
+      }
+      
+      // Boost for exact matches in specific fields
+      if (record.geminiSummary && parsedQuery.primaryKeywords) {
+        const summaryLower = record.geminiSummary.toLowerCase();
+        parsedQuery.primaryKeywords.forEach(keyword => {
+          if (summaryLower.includes(keyword.toLowerCase())) {
+            score += 5; // Extra for matches in AI summary
+          }
+        });
+      }
+      
+      // Normalize score to reasonable range
+      return {
+        ...record.toObject(),
+        relevanceScore: Math.min(100, score) // Cap at 100
+      };
+    });
   }
 
   // Advanced search with filters
@@ -305,14 +445,24 @@ class SearchController {
       // Build query
       const query = { user: req.user._id };
       
-      // Text search
+      // Text search - Use universal search patterns if keywords provided
       if (keywords.length > 0) {
-        query.$or = [
-          { title: { $regex: keywords.join('|'), $options: 'i' } },
-          { geminiSummary: { $regex: keywords.join('|'), $options: 'i' } },
-          { content: { $regex: keywords.join('|'), $options: 'i' } }
-        ];
-        debugLog(method, `Text search for: ${keywords.join(', ')}`);
+        // Combine keywords into a search phrase
+        const searchPhrase = keywords.join(' ');
+        
+        // Use universal search service to process the keywords
+        const universalResult = await universalSearchService.processUniversalQuery(
+          searchPhrase,
+          { 
+            userId: req.user._id,
+            userTypes: types 
+          }
+        );
+        
+        // Use the mongoQuery from universal service
+        Object.assign(query, universalResult.mongoQuery);
+        
+        debugLog(method, `Universal text search for: ${searchPhrase}`);
       }
       
       // Type filter
