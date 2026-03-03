@@ -450,9 +450,8 @@ async processSearchQuery(query, recordTypes = []) {
       phrases: parsed.phrases,
       types: parsed.detectedTypes,
       dateFilters: parsed.hasDate ? {} : null,
-      context: query
-    };
-    
+      context: query };
+    }
   } catch (error) {
     // Fallback to intelligent manual extraction
     return this.intelligentManualExtraction(query);
@@ -736,6 +735,7 @@ extractImageTitleFromDescription(description) {
 }
 
 module.exports = new GeminiService();
+
 
 
 
