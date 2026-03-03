@@ -26,11 +26,11 @@ const validate = (validations) => {
 // All routes require authentication
 router.use(auth);
 
-// POST /api/search - Natural language search
+// POST /api/search - Natural language search (UPDATED to use search() method)
 router.post(
   '/',
   validate(searchValidators.basic),
-  searchController.naturalSearch
+  searchController.search  // Changed from naturalSearch to search
 );
 
 // POST /api/search/advanced - Advanced search with filters
