@@ -58,4 +58,51 @@ router.put(
 // DELETE /api/records/:id - Delete record
 router.delete('/:id', recordController.deleteRecord);
 
+
+
+// GET /api/records/:id/download - Download original file
+router.get('/:id/download', auth, async (req, res) => {
+  try {
+    const record = await Record.findOne({
+      _id: req.params.id,
+      user: req.user._id
+    });
+    
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: 'Record not found'
+      });
+    }
+    
+    // For notes without files, return text content
+    if (record.type === 'note' && !record.fileUrl) {
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="${record.title.replace(/[^a-z0-9]/gi, '_')}.txt"`);
+      return res.send(record.content);
+    }
+    
+    // For files, redirect to Cloudinary URL with download parameter
+    if (record.fileUrl) {
+      // Add download parameter to force download
+      const downloadUrl = new URL(record.fileUrl);
+      downloadUrl.searchParams.set('fl_attachment', 'true');
+      return res.redirect(downloadUrl.toString());
+    }
+    
+    res.status(404).json({
+      success: false,
+      error: 'No downloadable content found'
+    });
+    
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Download failed'
+    });
+  }
+});
+
 module.exports = router;
+
