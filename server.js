@@ -26,7 +26,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:8080',
-  'https://k-filesaver.vercel.app/login',
+  'https://k-filesaver.vercel.app',
 ];
 
 const corsOptions = {
@@ -186,4 +186,5 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
 
